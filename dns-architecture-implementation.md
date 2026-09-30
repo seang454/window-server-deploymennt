@@ -115,7 +115,35 @@ Because AdGuard Home is packaged as a Linux container, Docker needs a lightweigh
 ### 1. Execution Steps (Docker Desktop with WSL2 Backend)
 
 #### Step 1: Enable Virtual Machine Platform & Containers Features
-Open PowerShell as Administrator:
+
+You can enable these built-in features using either the Graphical User Interface (GUI) or PowerShell:
+
+##### Option 1: Via Server Manager GUI (Visual Method)
+1. Open **Server Manager** (from the Start Menu or Taskbar).
+2. In the top-right corner, click **Manage** ➔ select **Add Roles and Features**.
+3. Click **Next** through:
+   * **Before You Begin** ➔ Click **Next**
+   * **Installation Type** ➔ Select *Role-based or feature-based installation* ➔ Click **Next**
+   * **Server Selection** ➔ Select your local server ➔ Click **Next**
+4. **Server Roles:** Click **Next** (no changes needed here).
+5. **Features (Important):**
+   * Scroll down the list and check the box for **`Containers`**.
+   * When prompted, click **Add Features** to include management tools.
+6. **Confirmation:**
+   * Check the box: **"Restart the destination server automatically if required"**.
+   * Click **Install**.
+7. Once finished, restart the server.
+
+##### Option 2: Via Classic Control Panel GUI (`appwiz.cpl`)
+1. Press `Win + R` on your keyboard, type **`appwiz.cpl`**, and press **Enter**.
+2. In the left sidebar, click **"Turn Windows features on or off"**.
+3. In the feature tree, check:
+   * ✅ **Containers**
+   * ✅ **Virtual Machine Platform** (or **Hyper-V Platform**)
+4. Click **OK**, let Windows apply changes, and click **Restart Now**.
+
+##### Option 3: Via PowerShell (Fastest - One Command)
+Open **PowerShell as Administrator**:
 ```powershell
 Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -All -NoRestart
 Enable-WindowsOptionalFeature -Online -FeatureName Containers -All -NoRestart
