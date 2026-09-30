@@ -13,8 +13,8 @@
 | **Physical Host OS** | Windows 10 / 11 with VMware Workstation Pro or Player | [ ] |
 | **Guest Virtual Machine** | Windows Server (2019 / 2022 / 2025) | [ ] |
 | **VMware Network Mode** | **Bridged (VMnet0)** (Connects to home Ezecom LAN) | [ ] |
-| **Static IP for Windows Server** | `192.168.1.50` (or appropriate IP in your router's subnet) | [ ] |
-| **Ezecom Router Gateway** | `192.168.1.1` | [ ] |
+| **Static IP for Windows Server** | `192.168.100.50` (or appropriate IP in your router's subnet) | [ ] |
+| **Ezecom Router Gateway** | `192.168.100.1` | [ ] |
 | **Docker Engine on Windows Server** | Docker Desktop or Mirantis Container Runtime | [ ] |
 
 ---
@@ -46,7 +46,7 @@ Run PowerShell as Administrator on Windows Server:
 Get-NetAdapter
 
 # Set Static IP, Subnet Mask (/24), and Gateway (Ezecom Router)
-New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.1.50 -PrefixLength 24 -DefaultGateway 192.168.1.1
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.50 -PrefixLength 24 -DefaultGateway 192.168.100.1
 
 # Set loopback as the preferred DNS (points to itself)
 Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("127.0.0.1")
@@ -56,9 +56,9 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("127.0.
 1. Open **Network Connections** (`ncpa.cpl`).
 2. Right-click your Ethernet adapter ➔ **Properties** ➔ Double-click **Internet Protocol Version 4 (TCP/IPv4)**.
 3. Configure:
-   * **IP address:** `192.168.1.50`
+   * **IP address:** `192.168.100.50`
    * **Subnet mask:** `255.255.255.0`
-   * **Default gateway:** `192.168.1.1` (Ezecom router IP)
+   * **Default gateway:** `192.168.100.1` (Ezecom router IP)
    * **Preferred DNS server:** `127.0.0.1`
 4. Click **OK** ➔ **OK**.
 
@@ -134,7 +134,7 @@ docker ps
 ## Phase 4: Configure AdGuard Home & Cloudflare DoH
 
 ### 1. Complete Setup Wizard
-1. Open your browser and navigate to: `http://localhost:3000` (or `http://192.168.1.50:3000`).
+1. Open your browser and navigate to: `http://localhost:3000` (or `http://192.168.100.50:3000`).
 2. Click **Get Started**.
 3. **Admin Web Interface:** Set listen port to `80` (inside container, which maps to `8080` outside).
 4. **DNS Server:** Set listen port to `53` (inside container, which maps to `5353` outside).
@@ -190,35 +190,35 @@ To verify that local domain resolution works independently of AdGuard:
 4. Zone Name: Type `itp.local` (or `rupp.local`) ➔ Click **Next** ➔ **Next** ➔ **Finish**.
 5. Right-click inside your new `itp.local` zone ➔ Select **New Host (A or AAAA)...**
    * **Name:** `fileserver`
-   * **IP address:** `192.168.1.20`
+   * **IP address:** `192.168.100.20`
    * Click **Add Host**.
 
 ---
 
 ## Phase 7: Verification & Testing Suite
 
-Execute the following verification tests from PowerShell on the server or any client machine configured to use `192.168.1.50` as DNS:
+Execute the following verification tests from PowerShell on the server or any client machine configured to use `192.168.100.50` as DNS:
 
 ### Test 1: Verify Local Domain Resolution (Windows DNS)
 ```powershell
-nslookup fileserver.itp.local 192.168.1.50
+nslookup fileserver.itp.local 192.168.100.50
 ```
-* **Expected Result:** Resolves immediately to `192.168.1.20` directly from Windows DNS.
+* **Expected Result:** Resolves immediately to `192.168.100.20` directly from Windows DNS.
 
 ### Test 2: Verify Internet Resolution (Cloudflare DoH via AdGuard)
 ```powershell
-nslookup google.com 192.168.1.50
+nslookup google.com 192.168.100.50
 ```
 * **Expected Result:** Returns Google's public IP address.
 
 ### Test 3: Verify Ad-Blocking & Threat Sinkhole
 ```powershell
-nslookup doubleclick.net 192.168.1.50
+nslookup doubleclick.net 192.168.100.50
 ```
 * **Expected Result:** Returns `0.0.0.0` or `Name does not exist` (Blocked by AdGuard!).
 
 ### Test 4: Inspect AdGuard Query Log
-1. Go to `http://192.168.1.50:8080`.
+1. Go to `http://192.168.100.50:8080`.
 2. Click **Query Log** in the top navigation.
 3. You will see `google.com` marked as **Processed** (encrypted to Cloudflare) and `doubleclick.net` marked in **RED** as **Blocked**.
 

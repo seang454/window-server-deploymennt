@@ -31,15 +31,15 @@ flowchart TD
     end
 
     subgraph PhysicalEnvironment ["🏠 Physical Layer (Cambodia / Ezecom ISP)"]
-        EzecomGPON["📡 Ezecom GPON Router\n• Gateway IP: 192.168.1.1\n• Role: Physical L2/L3 Gateway\n• Sees only encrypted port 443 traffic"]
+        EzecomGPON["📡 Ezecom GPON Router\n• Gateway IP: 192.168.100.1\n• Role: Physical L2/L3 Gateway\n• Sees only encrypted port 443 traffic"]
         PhysicalHost["🖥️ Physical Host PC (Windows 10/11)\n• Runs VMware Workstation Pro / Player"]
     end
 
     subgraph VMwareLayer ["📦 VMware Virtualization (Bridged VMnet0)"]
-        subgraph WinServerVM ["🪟 Windows Server Guest OS (Static IP: 192.168.1.50)"]
+        subgraph WinServerVM ["🪟 Windows Server Guest OS (Static IP: 192.168.100.50)"]
             
             subgraph Tier1 ["Tier 1: Local & Directory Authority"]
-                WinDNS["🗄️ Native Windows DNS Server\n• Listening on: 192.168.1.50:53 (UDP/TCP)\n• Authoritative Zone: *.itp.local\n• Forwarder Target: 127.0.0.1:5353"]
+                WinDNS["🗄️ Native Windows DNS Server\n• Listening on: 192.168.100.50:53 (UDP/TCP)\n• Authoritative Zone: *.itp.local\n• Forwarder Target: 127.0.0.1:5353"]
             end
 
             subgraph Tier2 ["Tier 2: Filtering & Cryptographic Gateway"]
@@ -51,7 +51,7 @@ flowchart TD
             WinDNS -- "Forward unresolved queries\n(Loopback :5353)" --> AdGuard
         end
 
-        ClientVM["💻 Client Devices / Lab VMs\n• Primary DNS: 192.168.1.50"]
+        ClientVM["💻 Client Devices / Lab VMs\n• Primary DNS: 192.168.100.50"]
     end
 
     %% Network links
@@ -74,14 +74,14 @@ sequenceDiagram
     actor Client as 💻 Client Device (PC/Phone/VM)
     participant WinDNS as 🗄️ Tier 1: Windows DNS (Port 53)
     participant AdGuard as 🛡️ Tier 2: AdGuard Docker (Port 5353)
-    participant Ezecom as 📡 Ezecom Router (192.168.1.1)
+    participant Ezecom as 📡 Ezecom Router (192.168.100.1)
     participant Cloudflare as 🌐 Cloudflare Anycast (1.1.1.1:443)
 
     rect rgb(240, 245, 255)
     Note over Client, WinDNS: PATH A: Authoritative Local Resolution (Active Directory / Internal Lab)
     Client->>WinDNS: 1. A-Record Query: "fileserver.itp.local"
     WinDNS->>WinDNS: Evaluate local Authoritative Zone (*.itp.local)
-    WinDNS-->>Client: 2. Authoritative Response: "192.168.1.20"
+    WinDNS-->>Client: 2. Authoritative Response: "192.168.100.20"
     Note over WinDNS, AdGuard: AdGuard and Internet are completely bypassed! Zero latency.
     end
 
@@ -137,9 +137,9 @@ Instead of fighting Windows kernel socket drivers, we decouple port obligations:
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ WINDOWS SERVER OS (192.168.1.50)                       │
+│ WINDOWS SERVER OS (192.168.100.50)                     │
 │                                                        │
-│  [Network Interface: 192.168.1.50:53]                  │
+│  [Network Interface: 192.168.100.50:53]                │
 │       ▲                                                │
 │       │ (Clients connect here)                         │
 │       │                                                │
