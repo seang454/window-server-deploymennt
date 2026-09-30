@@ -83,6 +83,80 @@ Install-WindowsFeature -Name DNS -IncludeManagementTools
 
 ---
 
+## Phase 2.5: Install Docker on Windows Server
+
+Because **AdGuard Home is a Linux-based container**, Docker on Windows Server requires a Linux backend. In modern Windows Server (2022 / 2025), this is powered by **WSL2** or **Hyper-V / Containers**.
+
+> [!IMPORTANT]
+> Ensure you completed **Phase 0** (checking "Virtualize Intel VT-x/EPT" in VMware settings). Without this, Docker cannot launch its Linux engine inside the VM.
+
+### Option A: Install Docker Desktop (Recommended - Includes GUI & Compose)
+
+#### Step 1: Enable Virtual Machine Platform & Containers Features
+Open **PowerShell as Administrator** on your Windows Server VM and run:
+
+```powershell
+# Enable Virtual Machine Platform and Containers features
+Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -All -NoRestart
+Enable-WindowsOptionalFeature -Online -FeatureName Containers -All -NoRestart
+
+# Restart the Windows Server VM to apply changes
+Restart-Computer
+```
+
+#### Step 2: Install WSL2 Linux Kernel
+After the VM restarts, open PowerShell as Administrator:
+
+```powershell
+# Install/Update the WSL2 core engine
+wsl --install --no-distribution
+wsl --update
+```
+
+#### Step 3: Download and Install Docker Desktop
+1. Download the Docker Desktop installer using PowerShell:
+   ```powershell
+   Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile "$env:TEMP\DockerDesktopInstaller.exe"
+   ```
+2. Run the installer:
+   ```powershell
+   Start-Process "$env:TEMP\DockerDesktopInstaller.exe" -Wait
+   ```
+   * During installation, ensure the box **"Use WSL 2 instead of Hyper-V"** is **checked**.
+3. Once completed, restart your VM or log out and log back in.
+4. Launch **Docker Desktop** from the Start Menu.
+5. In Docker Desktop Settings ➔ **General** ➔ Verify **"Use the WSL 2 based engine"** is enabled.
+
+#### Step 4: Verify Docker Installation
+Open PowerShell and check:
+```powershell
+docker --version
+docker compose version
+```
+*(You should see Docker version 24.x+ and Docker Compose v2.x+).*
+
+---
+
+### Option B: Install Docker via PowerShell (CLI-only / Server Core)
+
+If you prefer installing Docker via Microsoft's official PowerShell package:
+
+```powershell
+# Install the Docker-Microsoft package provider
+Install-Module -Name DockerMsftProvider -Repository PSGallery -Force
+
+# Install Docker Engine
+Install-Package -Name docker -ProviderName DockerMsftProvider -Force
+
+# Start Docker Service
+Start-Service docker
+
+# Install Docker Compose CLI
+Invoke-WebRequest -Uri "https://github.com/docker/compose/releases/latest/download/docker-compose-windows-x86_64.exe" -OutFile "$env:ProgramFiles\Docker\docker-compose.exe"
+```
+
+---
+
 ## Phase 3: Deploy AdGuard Home in Docker
 
 AdGuard Home will run in a Docker container on port `5353` to prevent conflicting with Windows DNS on port `53`.
