@@ -230,17 +230,39 @@ wsl --update
 ```
 
 #### Step 3: Download & Install Docker Desktop
+
+##### Option A: Via Microsoft Edge Browser (Standard GUI Method)
+1. Inside the Windows Server VM, open **Microsoft Edge**.
+2. Navigate to: `https://www.docker.com/products/docker-desktop/`
+3. Click the blue button: **Download for Windows** (downloads `Docker Desktop Installer.exe`, ~606 MB).
+4. Once downloaded, open your **Downloads** folder and double-click `Docker Desktop Installer.exe`.
+
+##### Option B: Via PowerShell (Automated Download)
+Open PowerShell as Administrator:
 ```powershell
 Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile "$env:TEMP\DockerDesktopInstaller.exe"
 Start-Process "$env:TEMP\DockerDesktopInstaller.exe" -Wait
 ```
-* During setup, ensure **"Use WSL 2 instead of Hyper-V"** is checked.
-* Log out and log back in, then launch Docker Desktop from the Start Menu.
+
+##### Installer Configuration Screen (What to choose):
+When the **"Configuration"** window appears:
+* **Option 1 (Default & Recommended):** Keep **`Per-user installation (Recommended)`** selected. This automatically uses the **WSL 2 backend**.
+* **Option 2 (All Users):** If you select **`All-users installation`**, make sure the checkbox **"Use WSL 2 instead of Hyper-V"** is **CHECKED** (do NOT check "Allow Windows Containers").
+* Keep **"Add shortcut to desktop"** checked.
+* Click **OK**.
+
+##### Post-Installation:
+1. Wait 2–3 minutes while packages unpack and install.
+2. When the installation completes, click **Close and restart** (or sign out and log back in).
+3. Once back on your desktop, double-click the **Docker Desktop** shortcut.
+4. Accept the Docker Service Agreement. Docker Desktop will start up with its green engine indicator!
 
 #### Step 4: Verify Docker Engine
+Open PowerShell and verify:
 ```powershell
 docker --version
 docker compose version
+docker info
 ```
 
 ### 💡 Why we do this (Technical Rationale):
