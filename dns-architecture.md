@@ -64,6 +64,59 @@ flowchart TD
 
 ---
 
+## 2.1 Deployment Models: NAT Mode (VMnet8) vs. Bridged Mode (VMnet0)
+
+When deploying this architecture in VMware Workstation, network engineers must choose between two virtual networking modes depending on where client devices reside and whether the host moves between physical locations.
+
+### Comparison Matrix
+
+| Architectural Feature | NAT Mode (`VMnet8`) **[Recommended for Labs]** | Bridged Mode (`VMnet0`) **[Physical Integration]** |
+| :--- | :--- | :--- |
+| **Virtual Subnet** | Isolated, immutable virtual subnet (e.g., `192.168.1.0/24`) | Inherited directly from external physical router (`192.168.100.0/24` or campus `10.1.64.0/20`) |
+| **Default Gateway** | VMware Virtual NAT Router (`192.168.1.1`) | Physical Router (e.g., Ezecom GPON `192.168.100.1` or Campus `10.1.64.1`) |
+| **Location Portability** | ✅ **100% Stable:** IP addresses never change whether you are at home, university, or a cafe. | ❌ **Fragile:** Moving between Wi-Fi networks breaks static IPs and requires reconfiguring the VM. |
+| **Campus / Enterprise Wi-Fi** | ✅ **Works Everywhere:** Bypasses 802.1X, MAC filtering, and captive portal login screens. | ❌ **Frequently Blocked:** Enterprise Wi-Fi drops secondary virtual MACs or blocks client-to-client traffic. |
+| **Client VM Support** | ✅ Fully supported (`pro-win-client`, `pro-win-client2` talk to server over `VMnet8`). | ✅ Supported (if router allows L2 intra-subnet forwarding). |
+| **Physical Device Access** | ❌ Requires manual port forwarding on VMware NAT to reach from external phones/PCs. | ✅ **Native:** Physical phones and laptops on the same Wi-Fi can directly query `192.168.100.50:53`. |
+
+---
+
+### Architectural Flow in NAT Mode (`VMnet8`)
+
+In NAT mode, VMware acts as a private Layer-3 router with stateful packet inspection. The entire DNS resolution and ad-blocking chain functions without any dependency on external router configuration:
+
+```mermaid
+flowchart TD
+    subgraph HostAndInternet ["🌐 External Network & Physical Host"]
+        PhysicalWiFi["📡 Physical Wi-Fi / Campus / Home Router\n• Dynamic IP (e.g., 10.1.79.209 or 192.168.100.4)"]
+        VMwareNAT["⚙️ VMware NAT Virtual Router (VMnet8)\n• Gateway: 192.168.1.1\n• Translates internal VM traffic to host socket"]
+        CloudflareDoH["🔒 Cloudflare DoH (1.1.1.1:443)\n• Upstream encrypted resolver"]
+        
+        PhysicalWiFi <--> CloudflareDoH
+        VMwareNAT <--> PhysicalWiFi
+    end
+
+    subgraph VMnet8Subnet ["📦 VMware Private Subnet (192.168.1.0/24)"]
+        ClientVM["💻 Client VM (pro-win-client)\n• IP: 192.168.1.20\n• Gateway: 192.168.1.1\n• Primary DNS: 192.168.1.10"]
+
+        subgraph ServerVM ["🪟 Windows Server (pro-win-server)\n• Static IP: 192.168.1.10\n• Gateway: 192.168.1.1"]
+            NativeDNS["🗄️ Tier 1: Windows DNS Server\n• Listening on: 192.168.1.10:53\n• Authoritative Zone: itp.local\n• Forwarder Target: 127.0.0.1:5353"]
+            AdGuardDocker["🛡️ Tier 2: AdGuard Home (Docker)\n• Container Port: 5353:53\n• Blocklists / Sinkhole (0.0.0.0)\n• Forwarder to https://dns.cloudflare.com/dns-query"]
+            
+            NativeDNS -- "Forward Unresolved (Loopback :5353)" --> AdGuardDocker
+        end
+
+        ClientVM -- "1. Standard UDP:53 Queries" --> NativeDNS
+        AdGuardDocker -- "2. Egress TLS Packets (Port 443)" --> VMwareNAT
+    end
+```
+
+### Architectural Verdict
+* **Use NAT Mode** for university coursework, mobile laptops, and multi-VM lab environments where clients are other VMs in VMware.
+* **Use Bridged Mode** strictly in fixed home/lab environments where physical smartphones, smart TVs, or external hardware need network-wide DNS filtering from the Windows Server.
+
+---
+
 ## 3. Deep Dive: DNS Query Lifecycle & State Flow
 
 The following sequence details how the system arbitrates between internal records, filtered threat domains, and valid public domains.

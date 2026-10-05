@@ -6,16 +6,17 @@
 
 ---
 
-## Pre-Implementation Checklist
+### Pre-Implementation Checklist
 
-| Requirement | Value / Target | Verified? |
-| :--- | :--- | :---: |
-| **Physical Host OS** | Windows 10 / 11 with VMware Workstation Pro or Player | [ ] |
-| **Guest Virtual Machine** | Windows Server (2019 / 2022 / 2025) | [ ] |
-| **VMware Network Mode** | **Bridged (VMnet0)** (Direct L2 connection to Ezecom LAN) | [ ] |
-| **Static IP for Windows Server** | `192.168.100.50` (in Ezecom router's subnet) | [ ] |
-| **Ezecom Router Gateway** | `192.168.100.1` | [ ] |
-| **Docker Engine on Windows Server** | Docker Desktop with WSL2 backend | [ ] |
+| Requirement | Value / Target (NAT Mode - Recommended) | Value / Target (Bridged Mode) |
+| :--- | :--- | :--- |
+| **Physical Host OS** | Windows 10 / 11 with VMware Workstation | Windows 10 / 11 with VMware Workstation |
+| **Guest Virtual Machine** | Windows Server (2019 / 2022 / 2025) | Windows Server (2019 / 2022 / 2025) |
+| **VMware Network Mode** | **NAT (VMnet8)** [Works anywhere, immune to Wi-Fi changes] | **Bridged (VMnet0)** [Direct L2 connection to physical LAN] |
+| **Static IP for Windows Server**| **`192.168.1.10`** | **`192.168.100.50`** (or matching router subnet) |
+| **Default Gateway** | **`192.168.1.1`** (VMware Virtual NAT Gateway) | **`192.168.100.1`** (Physical Home Router) |
+| **Client Devices** | Virtual Machine clients (`pro-win-client`, `pro-win-client2`) | Physical hardware (Smartphones, Smart TVs, external PCs) |
+| **Docker Engine on Server** | Docker Desktop with WSL2 backend | Docker Desktop with WSL2 backend |
 
 ---
 
@@ -46,9 +47,7 @@ Follow these sub-phases carefully.
      bcdedit /set hypervisorlaunchtype off
      ```
    * Ensure it returns: *"The operation completed successfully."*
-3. **Check BIOS (If Required):**
-   * Restart your physical laptop. Ensure **Intel Virtualization Technology (Intel VT-x / VMX)** is enabled in your BIOS/UEFI settings.
-4. **Boot into Windows 11.** VMware Workstation now has direct hardware access to Intel VT-x.
+3. **Boot into Windows 11.** VMware Workstation now has direct hardware access to Intel VT-x.
 
 ---
 
@@ -59,17 +58,15 @@ Follow these sub-phases carefully.
 3. **Hardware ➔ Processors:**
    * Check: ✅ **Virtualize Intel VT-x/EPT or AMD-V/RVI**.
    * *(Do not check CPU performance counters or IOMMU unless specifically required).*
-4. **Hardware ➔ Network Adapter:**
-   * Select: **Bridged: Connected directly to the physical network**.
-   * Check: **Replicate physical network connection state**.
-5. **Fix VMware Bridged Adapter Binding (Avoid "No Internet" Bug):**
-   * In VMware main window, go to **Edit** ➔ **Virtual Network Editor**.
-   * Click the **Change Settings** button at the bottom right (with the administrator shield).
-   * Select **VMnet0** (Bridged).
-   * Change **Bridged to:** from *Automatic* to your physical Wi-Fi adapter (e.g., `Intel(R) Wi-Fi 6E AX211 160MHz`).  
-     *(Do not leave it on "Automatic", as VMware often accidentally bridges to disconnected Ethernet, Tailscale, or Bluetooth adapters, cutting off VM internet).*
-   * Click **Apply** ➔ **OK**.
-6. Power on the Windows Server VM. It will now boot up cleanly with nested virtualization active.
+4. **Hardware ➔ Network Adapter (Choose Deployment Mode):**
+   * **Choice A: NAT Mode (`VMnet8`) [HIGHLY RECOMMENDED FOR LABS / LAPTOPS]:**
+     * Select **NAT: Used to share the host's IP address**.
+     * *(Benefits: Never breaks when switching between Home, School/Campus, or Cafe Wi-Fi. Bypasses 802.1X and captive portals).*
+   * **Choice B: Bridged Mode (`VMnet0`) [FOR PHYSICAL HOME DEVICES]:**
+     * Select **Bridged: Connected directly to the physical network**.
+     * Check **Replicate physical network connection state**.
+     * *Important:* In VMware main window, open **Edit ➔ Virtual Network Editor ➔ Change Settings (Admin)** ➔ Select **VMnet0** ➔ Change **Bridged to:** from *Automatic* to your specific physical Wi-Fi card (e.g., `Intel(R) Wi-Fi 6E AX211 160MHz`).
+5. Power on the Windows Server VM. It will now boot up cleanly with nested virtualization active.
 
 ---
 
@@ -113,41 +110,66 @@ When you have finished your Windows Server lab and want your physical host's WSL
 
 ## Phase 1: Set Static IP on Windows Server
 
-A DNS server must always maintain a fixed IP address.
+A DNS server must always maintain a fixed IP address. Choose the configuration matching your VMware network adapter setting from Phase 0.2.
 
-### 1. Execution Steps
+---
 
-#### Option A: Via PowerShell (Fastest)
-Run PowerShell as Administrator on Windows Server:
+### Choice A: For NAT Mode (`VMnet8`) **[Recommended for Labs & Laptops]**
 
+Use this mode if your VMware network adapter is set to **NAT**. It provides a fixed, reliable subnet that never breaks when moving between Home, School/Campus, or Cafe Wi-Fi.
+
+#### 1. Via PowerShell
 ```powershell
-# Get your active network adapter interface alias (usually "Ethernet0")
+# Get active network adapter interface alias (usually "Ethernet0")
 Get-NetAdapter
 
-# Set Static IP, Subnet Mask (/24), and Gateway (Ezecom Router)
-New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.50 -PrefixLength 24 -DefaultGateway 192.168.100.1
+# Set Static IP (192.168.1.10) and VMware NAT Gateway (192.168.1.1)
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.1.10 -PrefixLength 24 -DefaultGateway 192.168.1.1
 
-# Set loopback (127.0.0.1) as the preferred DNS resolver
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("127.0.0.1")
+# Set temporary public DNS (1.1.1.1 / 8.8.8.8) so VM has internet for downloading Docker
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("1.1.1.1", "8.8.8.8")
 ```
 
-#### Option B: Via GUI
+#### 2. Via GUI (`ncpa.cpl`)
 1. Open **Network Connections** (`ncpa.cpl`).
 2. Right-click your Ethernet adapter ➔ **Properties** ➔ Double-click **Internet Protocol Version 4 (TCP/IPv4)**.
 3. Configure:
-   * **IP address:** `192.168.100.50`
+   * **IP address:** `192.168.1.10`
    * **Subnet mask:** `255.255.255.0`
-   * **Default gateway:** `192.168.100.1` (Ezecom router IP)
-   * **Preferred DNS server:** `127.0.0.1`
+   * **Default gateway:** `192.168.1.1` (VMware Virtual NAT Gateway)
+   * **Preferred DNS server:** `1.1.1.1` *(switch to `127.0.0.1` after Phase 4)*
+   * **Alternate DNS server:** `8.8.8.8`
 4. Click **OK** ➔ **OK**.
+
+---
+
+### Choice B: For Bridged Mode (`VMnet0`) **[For Fixed Home Wi-Fi]**
+
+Use this mode ONLY if your VMware network adapter is set to **Bridged** and your laptop is on your fixed home Wi-Fi network.
+
+#### 1. Via PowerShell
+```powershell
+# Set Static IP on home subnet and Home Router Gateway
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.100.50 -PrefixLength 24 -DefaultGateway 192.168.100.1
+
+# Set temporary public DNS
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("1.1.1.1", "8.8.8.8")
+```
+
+#### 2. Via GUI (`ncpa.cpl`)
+* **IP address:** `192.168.100.50`
+* **Subnet mask:** `255.255.255.0`
+* **Default gateway:** `192.168.100.1` (Home Router IP)
+* **Preferred DNS server:** `1.1.1.1` *(switch to `127.0.0.1` after Phase 4)*
+* **Alternate DNS server:** `8.8.8.8`
+
+---
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why a Static IP is Mandatory:**  
-  If the server used DHCP, its IP address could change after a reboot or lease expiration. If the DNS server's IP changes from `.50` to `.89`, every computer, phone, and VM pointing to `.50` will immediately lose internet and domain name resolution.
-* **Why `192.168.100.50`?**  
-  Most home routers hand out dynamic IPs starting from `.100` to `.200`. Choosing `.50` places the server in the safe static pool below the router's dynamic range, avoiding IP collision with other devices.
-* **Why set Preferred DNS to `127.0.0.1` (Loopback)?**  
-  The Windows Server itself must use its own native DNS service to resolve domain lookups and locate its own Active Directory services, rather than querying an outside DNS server.
+  If the server used dynamic DHCP, its IP address could change after reboot. Any client VM (`pro-win-client`) pointing to that DNS IP would immediately lose internet and domain name resolution.
+* **Why use temporary public DNS (`1.1.1.1`) before switching to `127.0.0.1`?**  
+  In Phase 1, the Windows DNS Server role and AdGuard Home container are not yet running. If you point DNS to `127.0.0.1` immediately, the server queries itself, receives no reply, and loses internet access (blocking you from downloading Docker Desktop and WSL packages). Once Phase 4 is completed, DNS is switched to `127.0.0.1`.
 
 ---
 
