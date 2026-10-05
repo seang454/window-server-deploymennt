@@ -19,25 +19,95 @@
 
 ---
 
-## Phase 0: VMware Workstation Pre-Configuration
+## Phase 0: VMware Workstation & Physical Host Pre-Configuration
 
-Before powering on the Windows Server VM, two critical hypervisor settings must be configured.
+To run Docker (WSL2) inside a Windows Server VM running on VMware Workstation, you are setting up **Nested Virtualization** ("a VM inside a VM"). 
 
-### 1. Execution Steps
-1. In VMware Workstation, ensure the Windows Server VM is **Powered Off**.
+Because modern Windows 11 hosts run **Virtualization-Based Security (VBS)** and **Hyper-V** by default, Windows locks the CPU's hardware virtualization extensions (VT-x). If you try to enable VT-x in VMware without unlocking the host first, VMware will fail to boot with:
+`Feature 'hv.capable' was 0, but must be at least 0x1. Module 'FeatureCompatLate' power on failed.`
+
+Follow these sub-phases carefully.
+
+---
+
+### Phase 0.1: Unlock Hardware Virtualization on Physical Host (Laptop)
+
+> [!WARNING]
+> **Host Linux / Docker Impact:**  
+> When you disable the host hypervisor lock, WSL2 (Ubuntu) and Docker Desktop on your **physical laptop** will temporarily be unable to start. They will resume working normally once you restore the settings (see **Phase 0.4** below).
+
+1. **Turn Off Memory Integrity (Core Isolation):**
+   * On your physical host PC, open the Start Menu and search for **Core isolation** (or open **Windows Security** ➔ **Device Security** ➔ **Core isolation details**).
+   * Toggle **Memory integrity** to **OFF**.
+2. **Disable Host Hyper-V Boot Lock:**
+   * Right-click the Start Menu on your physical PC and open **PowerShell as Administrator** (or Windows Terminal Admin).
+   * Run the following command:
+     ```powershell
+     bcdedit /set hypervisorlaunchtype off
+     ```
+   * Ensure it returns: *"The operation completed successfully."*
+3. **Check BIOS (If Required):**
+   * Restart your physical laptop. Ensure **Intel Virtualization Technology (Intel VT-x / VMX)** is enabled in your BIOS/UEFI settings.
+4. **Boot into Windows 11.** VMware Workstation now has direct hardware access to Intel VT-x.
+
+---
+
+### Phase 0.2: Configure VMware Workstation VM Settings
+
+1. Ensure the Windows Server VM is **Powered Off**.
 2. Right-click the VM ➔ Select **Settings**.
 3. **Hardware ➔ Processors:**
-   * Check the box: **Virtualize Intel VT-x/EPT or AMD-V/RVI**.
+   * Check: ✅ **Virtualize Intel VT-x/EPT or AMD-V/RVI**.
+   * *(Do not check CPU performance counters or IOMMU unless specifically required).*
 4. **Hardware ➔ Network Adapter:**
-   * Select **Bridged: Connected directly to the physical network**.
-   * Check **Replicate physical network connection state**.
-5. Click **OK** and power on the VM.
+   * Select: **Bridged: Connected directly to the physical network**.
+   * Check: **Replicate physical network connection state**.
+5. **Fix VMware Bridged Adapter Binding (Avoid "No Internet" Bug):**
+   * In VMware main window, go to **Edit** ➔ **Virtual Network Editor**.
+   * Click the **Change Settings** button at the bottom right (with the administrator shield).
+   * Select **VMnet0** (Bridged).
+   * Change **Bridged to:** from *Automatic* to your physical Wi-Fi adapter (e.g., `Intel(R) Wi-Fi 6E AX211 160MHz`).  
+     *(Do not leave it on "Automatic", as VMware often accidentally bridges to disconnected Ethernet, Tailscale, or Bluetooth adapters, cutting off VM internet).*
+   * Click **Apply** ➔ **OK**.
+6. Power on the Windows Server VM. It will now boot up cleanly with nested virtualization active.
+
+---
+
+### Phase 0.3: Alternative - Run AdGuard Home Natively (No Host Changes Needed)
+
+> [!TIP]
+> If you do not want to disable Hyper-V on your physical laptop because you actively use Docker/Ubuntu on your host, you can run **AdGuard Home as a native Windows service** directly on Windows Server instead of inside Docker.  
+> 1. Download `AdGuardHome_windows_amd64.zip` inside the VM.  
+> 2. Extract to `C:\AdGuardHome`.  
+> 3. Run `.\AdGuardHome.exe -s install` in PowerShell.  
+> This requires **no nested virtualization (VT-x can stay OFF)** and uses only ~30 MB RAM while achieving the exact same ad-blocking and DoH results.
+
+---
+
+### Phase 0.4: How to Revert & Restore Linux (WSL2 / Docker) on Your Physical Laptop
+
+When you have finished your Windows Server lab and want your physical host's WSL2, Ubuntu, and Docker Desktop to work again:
+
+1. **Power off the Windows Server VM** in VMware.
+2. In VMware VM Settings ➔ **Processors** ➔ **UNCHECK** `Virtualize Intel VT-x/EPT or AMD-V/RVI`.  
+   *(If you leave this checked while the host hypervisor is re-enabled, VMware will show the `hv.capable` error again).*
+3. Open **PowerShell as Administrator** on your physical laptop and run:
+   ```powershell
+   bcdedit /set hypervisorlaunchtype auto
+   ```
+4. (Optional) In **Windows Security ➔ Device Security ➔ Core isolation details**, turn **Memory integrity** back to **ON**.
+5. **Restart your physical laptop.**
+6. Once rebooted, launch **Ubuntu (WSL2)** or **Docker Desktop** on your physical laptop. They will start normally!
+
+---
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why enable "Virtualize Intel VT-x/EPT"?**  
-  AdGuard Home is a Linux-based container. Running Docker on Windows Server requires a lightweight Linux VM in the background (WSL2 or Hyper-V). Because your Windows Server is *already* a virtual machine inside VMware, running Docker creates a "VM inside a VM" (**Nested Virtualization**). If you don't enable VT-x in VMware, Windows Server cannot access hardware CPU virtualization instructions, and Docker will crash with: `Hardware assisted virtualization is not enabled`.
-* **Why Bridged Mode instead of NAT?**  
-  In NAT mode (`VMnet8`), VMware hides the VM behind a private virtual router that only the host PC can reach; physical devices on your Wi-Fi (phones, test PCs) cannot send DNS packets to the VM. In **Bridged mode**, VMware attaches the virtual network card directly to your physical network interface, giving the VM its own real IP on your Ezecom Wi-Fi (`192.168.100.50`).
+  AdGuard Home is packaged as a Linux-based container. Running Docker Desktop on Windows Server requires a Linux VM backend (WSL2 or Hyper-V). Because your Windows Server is *already* a virtual machine inside VMware, running Docker creates a "VM inside a VM" (**Nested Virtualization**). If you don't pass VT-x into VMware, Windows Server cannot run the WSL2 Linux kernel.
+* **Why `bcdedit /set hypervisorlaunchtype off` is necessary on Windows 11?**  
+  Windows 11 utilizes the Microsoft Hyper-V hypervisor for system security (VBS) and WSL2. Hyper-V monopolizes CPU VT-x instructions at Ring -1. Setting `hypervisorlaunchtype off` releases this lock so VMware Workstation can access VT-x directly.
+* **Why Bridged Mode must be mapped manually?**  
+  VMware's "Automatic" bridge detection often binds to secondary virtual adapters (such as VPN tunnels, Tailscale, or disconnected Ethernet ports) rather than the active Wi-Fi card. Manually pinning VMnet0 ensures stable layer-2 connectivity to your home/lab router.
 
 ---
 
