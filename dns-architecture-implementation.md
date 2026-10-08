@@ -402,29 +402,68 @@ docker ps
 
 ### 1. Execution Steps
 
-#### Option A: Via PowerShell
+#### Step 1: Restrict Windows DNS to Primary IP (`192.168.1.10`)
+By default, Windows DNS listens on `0.0.0.0:53` (all interfaces), blocking Docker from binding port 53. Restrict Windows DNS to only listen on your VM's primary static IP (`192.168.1.10`):
+
 ```powershell
-Set-DnsServerForwarder -IPAddress 127.0.0.1 -PassThru
+# Restrict Windows DNS to only listen on primary adapter IP
+dnscmd . /resetlistenaddresses 192.168.1.10
+
+# Restart Windows DNS service
+Restart-Service DNS
 ```
 
-#### Option B: Via DNS Manager GUI
-1. Open **DNS Manager** (`dnsmgmt.msc`).
-2. Right-click your server name (e.g., `WIN-J17IMHCEMA9`) ➔ Select **Properties**.
-3. Click on the **Forwarders** tab ➔ Click **Edit...**
-4. Type `127.0.0.1` and press Enter.
-5. Click **OK** ➔ **Apply** ➔ **OK**.
+#### Step 2: Assign Secondary Dedicated IP (`192.168.1.11`) for AdGuard
+Add a secondary IP to `Ethernet0` so AdGuard has its own dedicated endpoint on port 53:
 
-#### Post-Configuration: Switch Server DNS to Loopback
-Now that Windows DNS is running and forwarders are configured to AdGuard, point Windows Server's own network adapter to itself:
 ```powershell
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("127.0.0.1")
+New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.1.11 -PrefixLength 24
+```
+
+#### Step 3: Bind AdGuard to `192.168.1.11:53` in `docker-compose.yml`
+In `C:\adguard\docker-compose.yml`, bind AdGuard to the secondary IP on standard port 53:
+
+```yaml
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: adguardhome
+    restart: unless-stopped
+    ports:
+      - "192.168.1.11:53:53/tcp"
+      - "192.168.1.11:53:53/udp"
+      - "8080:80/tcp"
+    volumes:
+      - ./workdir:/opt/adguardhome/work
+      - ./confdir:/opt/adguardhome/conf
+```
+
+Apply the changes:
+```powershell
+cd C:\adguard
+docker compose up -d
+```
+
+#### Step 4: Configure Windows DNS Forwarder to AdGuard
+Now configure Windows DNS to forward all external queries to AdGuard on `192.168.1.11`:
+
+```powershell
+Set-DnsServerForwarder -IPAddress 192.168.1.11 -PassThru
+```
+
+#### Step 5: Switch Windows Server Network Adapter DNS to Itself
+Point Windows Server's network adapter to Windows DNS:
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.168.1.10")
 ```
 
 ### 💡 Why we do this (Technical Rationale):
-* **Why configure a Forwarder?**  
-  Windows DNS knows all local records inside your domain (`*.e6.local` or `*.itp.local`). However, when a client asks for `google.com` or `facebook.com`, Windows DNS says: *"I don't host that domain. Let me ask my Forwarder."*
-* **Why point the forwarder to `127.0.0.1` (AdGuard)?**  
-  This completes the hybrid chain. Unresolved external queries flow directly from Windows DNS into AdGuard Home, where ads and malware are stripped away before being securely encrypted to Cloudflare.
+* **Why assign a secondary IP (`192.168.1.11`)?**  
+  Windows Server DNS (`dns.exe`) retains a low-level lock on loopback (`127.0.0.1:53`) for internal Windows security services (Kerberos/Active Directory). By assigning a secondary IP (`192.168.1.11`) to `Ethernet0` and restricting Windows DNS to `192.168.1.10`, port `53` on `192.168.1.11` is 100% available for Docker.
+* **Why point Windows DNS Forwarder to `192.168.1.11`?**  
+  Windows DNS Forwarders only query port `53`. Forwarding to `192.168.1.11` allows seamless communication without any port conflicts.
+* **Why point Ethernet0 DNS to `192.168.1.10`?**  
+  This ensures Windows Server and all domain services use the Windows DNS server as their primary resolver. Windows DNS resolves all internal domain records (`*.e6.local`) locally, and forwards all external internet queries (`google.com`, `github.com`) to AdGuard on `192.168.1.11:53` for ad-blocking and encrypted upstream resolution.
 
 ---
 
