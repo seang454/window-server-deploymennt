@@ -35,23 +35,23 @@ flowchart TD
         PhysicalHost["🖥️ Physical Host PC (Windows 10/11)\n• Runs VMware Workstation Pro / Player"]
     end
 
-    subgraph VMwareLayer ["📦 VMware Virtualization (Bridged VMnet0)"]
-        subgraph WinServerVM ["🪟 Windows Server Guest OS (Static IP: 192.168.100.50)"]
+    subgraph VMwareLayer ["📦 VMware Virtualization (NAT VMnet8: 192.168.1.0/24)"]
+        subgraph WinServerVM ["🪟 Windows Server Guest OS (WIN-J17IMHCEMA9.e6.local)"]
             
             subgraph Tier1 ["Tier 1: Local & Directory Authority"]
-                WinDNS["🗄️ Native Windows DNS Server\n• Listening on: 192.168.100.50:53 (UDP/TCP)\n• Authoritative Zone: *.itp.local\n• Forwarder Target: 127.0.0.1:5353"]
+                WinDNS["🗄️ Native Windows DNS Server\n• Listening on: 192.168.1.10:53 (UDP/TCP)\n• Authoritative Zone: *.e6.local\n• Forwarder Target: 192.168.1.11:53"]
             end
 
             subgraph Tier2 ["Tier 2: Filtering & Cryptographic Gateway"]
-                DockerDaemon["🐳 Docker Engine (WSL2 / Hyper-V Engine)"]
-                AdGuard["🛡️ AdGuard Home Container\n• Host Port: 5353:53 (UDP/TCP)\n• Web Management: 8080:80 (HTTP)\n• Initial Wizard: 3000:3000\n• Upstream: https://dns.cloudflare.com/dns-query"]
+                DockerDaemon["🐳 Docker Engine (WSL2 Backend)"]
+                AdGuard["🛡️ AdGuard Home Container\n• Listening on: 192.168.1.11:53 (UDP/TCP)\n• Web Management: 8080:80 (HTTP)\n• Upstream: https://1.1.1.1/dns-query"]
                 DockerDaemon --- AdGuard
             end
 
-            WinDNS -- "Forward unresolved queries\n(Loopback :5353)" --> AdGuard
+            WinDNS -- "Forward unresolved queries\n(Port 53 to 192.168.1.11)" --> AdGuard
         end
 
-        ClientVM["💻 Client Devices / Lab VMs\n• Primary DNS: 192.168.100.50"]
+        ClientVM["💻 Client Devices / Lab VMs (pro-win-client)\n• IP: 192.168.1.20\n• Primary DNS: 192.168.1.10"]
     end
 
     %% Network links
@@ -185,38 +185,40 @@ Under Windows Server, any service implementing DNS will attempt to bind to `0.0.
   bind: An attempt was made to access a socket in a way forbidden by its access permissions.
   ```
 
-### The Architectural Strategy
-Instead of fighting Windows kernel socket drivers, we decouple port obligations:
+### The Architectural Strategy: Dual-IP Multihoming
+
+Because Windows DNS Forwarders cannot send to custom ports like `:5353`, and Windows DNS retains a permanent lock on `127.0.0.1:53`, we decouple port 53 obligations using **Secondary IP Multihoming** on the same virtual network card (`Ethernet0`):
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ WINDOWS SERVER OS (192.168.100.50)                     │
+│ WINDOWS SERVER GUEST OS (WIN-J17IMHCEMA9.e6.local)     │
 │                                                        │
-│  [Network Interface: 192.168.100.50:53]                │
+│  [Primary Adapter IP: 192.168.1.10:53]                 │
 │       ▲                                                │
-│       │ (Clients connect here)                         │
+│       │ (Clients connect here for *.e6.local)          │
 │       │                                                │
 │  ┌────┴──────────────────────────┐                     │
 │  │ Native Windows DNS Server     │                     │
-│  │ Listening: Port 53            │                     │
-│  │ Forwarder: 127.0.0.1:5353     │                     │
+│  │ Listening: 192.168.1.10:53    │                     │
+│  │ Forwarder: 192.168.1.11:53    │                     │
 │  └────┬──────────────────────────┘                     │
-│       │ (Internal loopback query)                      │
+│       │ (Unresolved external queries)                  │
 │       ▼                                                │
-│  [Host Port Mapping: 127.0.0.1:5353]                   │
+│  [Secondary Adapter IP: 192.168.1.11:53]               │
 │       │                                                │
-│       ▼ (Docker Port Translation)                      │
+│       ▼ (Docker Container Binding)                     │
 │  ┌───────────────────────────────┐                     │
 │  │ AdGuard Home Container        │                     │
-│  │ Container Port: 53            │                     │
+│  │ Listening: 192.168.1.11:53    │                     │
+│  │ Upstream: https://1.1.1.1/dns │                     │
 │  └───────────────────────────────┘                     │
 └────────────────────────────────────────────────────────┘
 ```
 
-1. **Windows DNS** remains the sole listener on standard port `53`. All network clients (PCs, phones, VMs) only talk to port `53`.
-2. **AdGuard Home** maps host port `5353` ➔ container port `53`.
-3. **Windows DNS Forwarder** is configured to query `127.0.0.1` on port `5353`.
-4. Result: Zero port collisions, 100% service uptime.
+1. **Windows DNS** listens strictly on `192.168.1.10:53`. All network clients (VMs, phones, PCs) use this IP as their primary DNS.
+2. **AdGuard Home** in Docker binds to the secondary IP on `192.168.1.11:53`.
+3. **Windows DNS Forwarder** is configured to query `192.168.1.11` on standard port `53`.
+4. Result: Zero port collisions, 100% Active Directory compliance, and complete upstream DoH privacy.
 
 ---
 

@@ -309,17 +309,15 @@ cd C:\adguard
 Create `C:\adguard\docker-compose.yml`:
 
 ```yaml
-version: '3.8'
-
 services:
   adguardhome:
     image: adguard/adguardhome:latest
     container_name: adguardhome
     restart: unless-stopped
     ports:
-      # Map host port 5353 to container port 53 (Avoids Windows DNS conflict)
-      - "5353:53/tcp"
-      - "5353:53/udp"
+      # Bind directly to dedicated secondary IP on port 53 (Avoids Windows DNS conflict)
+      - "192.168.1.11:53:53/tcp"
+      - "192.168.1.11:53:53/udp"
       # Initial setup wizard port
       - "3000:3000/tcp"
       # Web Admin dashboard
@@ -341,8 +339,8 @@ docker ps
 ```
 
 ### 💡 Why we do this (Technical Rationale):
-* **Why map host port `5353` to container port `53` (`- "5353:53"`)?**  
-  Native Windows DNS is already listening on port `53`. If Docker attempts to bind `-p 53:53`, the Windows networking stack throws `bind: address already in use` error. Mapping to `5353` allows both services to run simultaneously on the same host without conflict.
+* **Why bind AdGuard to secondary IP `192.168.1.11:53`?**  
+  Native Windows DNS is already listening on `192.168.1.10:53`. Windows DNS Forwarders only know how to forward to port `53` (they cannot forward to custom ports like `:5353`). Binding AdGuard to `192.168.1.11:53` gives AdGuard its own dedicated port 53 socket on the same network card without any conflict.
 * **Why use persistent volumes (`./workdir` and `./confdir`)?**  
   Containers are ephemeral by design (if a container restarts or updates, everything inside is wiped). Volume mappings store AdGuard's blocklists, query logs, and admin passwords in folders on the Windows Server hard drive (`C:\adguard\confdir`), ensuring data survives updates.
 * **Why `restart: unless-stopped`?**  
@@ -358,7 +356,7 @@ docker ps
 1. Open browser: `http://localhost:3000` (or `http://192.168.1.10:3000`).
 2. Click **Get Started**.
 3. **Admin Web Interface:** Set listen port to `80` (mapped to `8080` outside).
-4. **DNS Server:** Set listen port to `53` (mapped to `5353` outside).
+4. **DNS Server:** Set listen port to `53` (mapped to `192.168.1.11:53` outside).
 5. Set **Admin Username** and **Password** ➔ Click **Next** ➔ **Finish**.
 
 #### Step 2: Configure Encrypted Upstream DNS
@@ -483,7 +481,7 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.16
 1. In **DNS Manager**, expand server name.
 2. Right-click **Forward Lookup Zones** ➔ Select **New Zone...**
 3. Select **Primary zone** ➔ Click **Next**.
-4. Zone Name: Type `itp.local` (or your existing domain `e6.local`) ➔ Click **Next** ➔ **Finish**.
+4. Zone Name: Type `e6.local` ➔ Click **Next** ➔ **Finish**.
 5. Right-click inside your zone ➔ Select **New Host (A or AAAA)...**:
    * **Name:** `fileserver`
    * **IP address:** `192.168.1.50` (or `192.168.100.20` in Bridged Mode)
@@ -491,7 +489,7 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.16
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why an Authoritative Zone?**  
-  This demonstrates the core power of Windows DNS: any query ending in `.itp.local` is answered immediately from the server's local database. It never leaves your network and never hits AdGuard or the internet, guaranteeing instant response times for internal servers.
+  This demonstrates the core power of Windows DNS: any query ending in `.e6.local` is answered immediately from the server's local database. It never leaves your network and never hits AdGuard or the internet, guaranteeing instant response times for internal servers.
 
 ---
 
@@ -502,10 +500,7 @@ Run these tests in PowerShell on the **Windows Server VM** (or from client VM `p
 ### Test 1: Verify Local Authoritative Resolution (Windows DNS)
 ```powershell
 # For NAT Mode (192.168.1.10):
-nslookup fileserver.itp.local 192.168.1.10
-
-# For Bridged Mode (192.168.100.50):
-# nslookup fileserver.itp.local 192.168.100.50
+nslookup fileserver.e6.local 192.168.1.10
 ```
 * **Expected Result:** Returns `192.168.1.50`.
 * **Rationale:** Proves local DNS resolves immediately without going to the internet.
@@ -587,7 +582,7 @@ nslookup google.com 192.168.1.11
 nslookup google.com 192.168.1.10
 
 # Test Local Zone Authority (Windows DNS):
-nslookup fileserver.itp.local 192.168.1.10
+nslookup fileserver.e6.local 192.168.1.10
 
 # Test Ad Sinkhole (AdGuard):
 nslookup adservice.google.com 192.168.1.10
