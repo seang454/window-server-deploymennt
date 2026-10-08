@@ -13,10 +13,50 @@
 | **Physical Host OS** | Windows 10 / 11 with VMware Workstation | Windows 10 / 11 with VMware Workstation |
 | **Guest Virtual Machine** | Windows Server (2019 / 2022 / 2025) | Windows Server (2019 / 2022 / 2025) |
 | **VMware Network Mode** | **NAT (VMnet8)** [Works anywhere, immune to Wi-Fi changes] | **Bridged (VMnet0)** [Direct L2 connection to physical LAN] |
-| **Static IP for Windows Server**| **`192.168.1.10`** | **`192.168.100.50`** (or matching router subnet) |
+| **Primary Static IP for Server**| **`192.168.1.10`** (Windows DNS & Active Directory) | **`192.168.100.50`** (or matching router subnet) |
+| **Secondary Static IP for AdGuard**| **`192.168.1.11`** (AdGuard Home Port 53) | **`192.168.100.51`** |
 | **Default Gateway** | **`192.168.1.1`** (VMware Virtual NAT Gateway) | **`192.168.100.1`** (Physical Home Router) |
 | **Client Devices** | Virtual Machine clients (`pro-win-client`, `pro-win-client2`) | Physical hardware (Smartphones, Smart TVs, external PCs) |
 | **Docker Engine on Server** | Docker Desktop with WSL2 backend | Docker Desktop with WSL2 backend |
+
+---
+
+### 📌 Master Subnet IP Allocation Schema (`192.168.1.0/24`)
+
+Use this IP plan to ensure other VMs, containers, and servers do not conflict:
+
+| IP Address Range | Assigned Role / Machine | Status | Can Other Servers Use This IP? |
+| :--- | :--- | :---: | :--- |
+| **`192.168.1.1`** | VMware Virtual NAT Gateway | 🔒 Active | ❌ **NO** (Network Gateway) |
+| **`192.168.1.10`** | Windows Server Primary VM (`WIN-J17IMHCEMA9`) | 🔒 Active | ❌ **NO** (Active Directory Domain Controller) |
+| **`192.168.1.11`** | AdGuard Home Container (Port 53) | 🔒 Active | ❌ **NO** (Dedicated for AdGuard DNS) |
+| **`192.168.1.12 - 192.168.1.19`** | Reserved for Future Static Servers (Web, DB, Linux) | 🟢 **FREE** | ✅ **YES** (Assign to new static server VMs) |
+| **`192.168.1.20`** | `pro-win-client` (Lab Client VM 1) | 🔒 Active | ❌ **NO** (Client VM 1) |
+| **`192.168.1.21`** | `pro-win-client2` (Lab Client VM 2) | 🔒 Active | ❌ **NO** (Client VM 2) |
+| **`192.168.1.22 - 192.168.1.49`** | Reserved for Future Client Static VMs | 🟢 **FREE** | ✅ **YES** (Assign to client testing VMs) |
+| **`192.168.1.50`** | `fileserver.e6.local` (Member File Server) | ⚠️ Reserved | ⚠️ Reserved for Storage / File Server |
+| **`192.168.1.100 - 192.168.1.254`**| Windows Server DHCP Scope Pool | 🔄 Dynamic | ❌ **NO** (Dynamically leased by Windows DHCP) |
+
+#### 💡 The Core Networking Rule: 1 Virtual Machine = 1 IP Address
+
+```text
+┌────────────────────────────────────────┬──────────────────────┐
+│ Virtual Machine in VMware              │ Its Dedicated IP     │
+├────────────────────────────────────────┼──────────────────────┤
+│ 💻 Client VM 1 (pro-win-client)        │ 192.168.1.20         │
+│ 💻 Client VM 2 (pro-win-client2)       │ 192.168.1.21         │
+│ 🐧 New Linux / Web Server VM           │ 192.168.1.12         │
+│ 🗄️ New Database Server VM              │ 192.168.1.13         │
+│ 📁 Storage / File Server VM            │ 192.168.1.50         │
+└────────────────────────────────────────┴──────────────────────┘
+```
+
+* **The Standard Rule:** In standard networking, **1 Virtual Machine = 1 unique IP Address**.
+* **The ONLY Special Exception in Your Lab:** Your **Windows Server VM (`WIN-J17IMHCEMA9`)** holds **two IP addresses (`.10` and `.11`)** on the same virtual network card (`Ethernet0`).
+  * `192.168.1.10` ➔ Windows Server itself (Active Directory & Windows DNS)
+  * `192.168.1.11` ➔ AdGuard Docker container (Dedicated Port 53 socket)
+  * *Why?* Because we squeezed two DNS servers that both strictly required Port 53 onto that single machine without spinning up an extra VM.
+* **For Every Other VM:** Always follow the standard rule: **1 VM = 1 unique IP address**. Never assign `.10` or `.11` to any other machine on the network!
 
 ---
 

@@ -470,3 +470,24 @@ You can verify and view this multihoming configuration directly in the Windows g
 4. In the **IP Settings** tab under **IP addresses**, both addresses appear:
    * `192.168.1.10` (Mask: `255.255.255.0`)
    * `192.168.1.11` (Mask: `255.255.255.0`)
+
+#### 5. Architectural Principle: 1 Virtual Machine = 1 IP Address (The Exception vs. The Standard)
+
+```text
+┌────────────────────────────────────────┬──────────────────────┐
+│ Virtual Machine in VMware              │ Its Dedicated IP     │
+├────────────────────────────────────────┼──────────────────────┤
+│ 💻 Client VM 1 (pro-win-client)        │ 192.168.1.20         │
+│ 💻 Client VM 2 (pro-win-client2)       │ 192.168.1.21         │
+│ 🐧 New Linux / Web Server VM           │ 192.168.1.12         │
+│ 🗄️ New Database Server VM              │ 192.168.1.13         │
+│ 📁 Storage / File Server VM            │ 192.168.1.50         │
+└────────────────────────────────────────┴──────────────────────┘
+```
+
+* **The Standard Rule:** Under standard network engineering principles, **1 Virtual Machine = 1 unique IP Address**.
+* **The Single Special Exception:** The Windows Server VM (`WIN-J17IMHCEMA9`) holds **two IP addresses (`.10` and `.11`)** on the same virtual network adapter (`Ethernet0`).
+  * `192.168.1.10` ➔ Windows Server Host (Active Directory, Windows DNS)
+  * `192.168.1.11` ➔ AdGuard Home Docker (Dedicated Port 53 socket)
+  * *Rationale:* This specific multihoming pattern was introduced exclusively to resolve the Port 53 bind collision between Windows DNS and Docker without requiring a second virtual machine.
+* **Network Isolation Warning:** Never configure `192.168.1.10` or `192.168.1.11` on any other VM or physical device. Doing so results in fatal ARP collisions and network instability. All other VMs must each receive their own unique IP address from the pool (e.g., `192.168.1.12+`, `192.168.1.20+`).
