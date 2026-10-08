@@ -258,3 +258,88 @@ In this architecture, AdGuard Home implements DoH to Cloudflare (`https://dns.cl
 
 ## 7. Summary
 This architecture achieves **enterprise-grade directory compliance** without sacrificing **modern privacy, ad-blocking, and threat protection**. It isolates external ISP visibility while providing local systems with sub-millisecond authoritative resolution.
+
+---
+
+## 8. VMware Virtual Network Architecture: Bridged vs. NAT vs. Host-Only
+
+Hypervisors like VMware Workstation provide three primary virtual networking topologies. Selecting the correct type determines how the virtual machines communicate with the host PC, other virtual machines, and the outside internet.
+
+### Comprehensive Comparison Matrix
+
+| Architectural Feature | 1. Bridged (`VMnet0`) | 2. NAT (`VMnet8`) | 3. Host-Only (`VMnet1`) |
+| :--- | :---: | :---: | :---: |
+| **Internet Access** | ✅ Yes (Direct via physical gateway) | ✅ Yes (Shared via host network) | ❌ **No (Completely Offline)** |
+| **Inter-VM Routing** | ✅ Yes (Across the same subnet) | ✅ Yes (Within `192.168.1.0/24`) | ✅ Yes (Within `192.168.127.0/24`) |
+| **Host-to-VM Communication** | ✅ Yes | ✅ Yes | ✅ Yes |
+| **External Physical Device Access** | ✅ **Direct:** Physical phones/PCs can directly query VM IP | ❌ **Hidden:** Requires manual VMware Port Forwarding | ❌ **Completely Blocked** |
+| **IP Address Management** | Assigned by physical router (e.g., Ezecom or Campus DHCP) | Managed by VMware NAT router or internal Windows Server DHCP | Managed by VMware Host-Only switch or internal DHCP |
+| **Campus / Enterprise Wi-Fi** | ❌ **Fragile:** Blocked by 802.1X, MAC filters, and captive portals | ✅ **100% Stable:** Bypasses campus restrictions transparently | N/A (Offline network) |
+| **Mobility (Home ➔ School ➔ Cafe)** | ❌ Breaks (Subnet changes with physical router) | ✅ **Immutable:** Subnet remains identical anywhere | ✅ **Immutable:** Subnet remains identical anywhere |
+
+---
+
+### Detailed Mechanics & Real-World Analogies
+
+```mermaid
+flowchart TD
+    subgraph Mode1 ["1. Bridged Mode (VMnet0) - 'Independent House'"]
+        PhysRouter1["📡 Physical Wi-Fi Router\n(Gateway: 192.168.100.1)"]
+        Laptop1["💻 Host Laptop\n(192.168.100.4)"]
+        VM1["🪟 Windows Server\n(192.168.100.50)"]
+        PhysPhone["📱 Physical Phone\n(192.168.100.25)"]
+
+        PhysRouter1 <--> Laptop1
+        PhysRouter1 <--> VM1
+        PhysPhone <--> VM1
+    end
+
+    subgraph Mode2 ["2. NAT Mode (VMnet8) - 'Apartment behind Reception'"]
+        PhysRouter2["📡 Physical Wi-Fi Router\n(Dynamic Campus/Home IP)"]
+        HostNIC2["💻 Host Wi-Fi NIC"]
+        VMNATRouter["⚙️ VMware NAT Router (192.168.1.1)"]
+        VM2["🪟 Windows Server (192.168.1.10)"]
+        ClientVM2["💻 Client VM (192.168.1.20)"]
+
+        PhysRouter2 <--> HostNIC2 <--> VMNATRouter
+        VMNATRouter <--> VM2
+        VMNATRouter <--> ClientVM2
+        VM2 <--> ClientVM2
+    end
+
+    subgraph Mode3 ["3. Host-Only Mode (VMnet1) - 'Underground Bunker'"]
+        HostNIC3["💻 Host Loopback Virtual NIC"]
+        VM3["🪟 Malware Sandbox VM"]
+        ClientVM3["💻 Isolated Analysis Client"]
+
+        HostNIC3 <--> VM3
+        HostNIC3 <--> ClientVM3
+        VM3 <--> ClientVM3
+    end
+```
+
+#### 1. Bridged Mode (`VMnet0`) - "An Independent House on the Street"
+* **How it operates:** VMware binds the virtual network card directly to the physical network card (Wi-Fi or Ethernet) using the `VMware Bridge Protocol` driver. The VM broadcasts its own unique virtual MAC address directly onto the physical router's Layer-2 switch fabric.
+* **Real-World Analogy:** A separate house on the same street with its own mailbox.
+* **When to use:** When physical hardware on your local network (e.g., your smartphone, smart TV, or a classmate's laptop) must connect directly to services (DNS, Web, SMB) running inside your VM.
+* **Limitations:** Every time your host laptop switches Wi-Fi networks (e.g. from home to university), the physical subnet changes, causing static IPs to drop offline. Furthermore, enterprise networks with 802.1X security frequently drop secondary virtual MAC addresses.
+
+#### 2. NAT Mode (`VMnet8`) - "An Apartment behind a Front Desk / Router"
+* **How it operates:** VMware provisions an internal software router and virtual switch. The host laptop's physical network adapter acts as the WAN interface, while all VMs sit on a private virtual LAN (`192.168.1.0/24`). Outbound packets have their source IP translated (NATed) to the host PC's IP.
+* **Real-World Analogy:** An apartment building with a single front door and front desk. Outside visitors only see the main building, while apartments communicate freely through interior hallways.
+* **When to use:** **The industry standard for development laptops and coursework.** It isolates the lab environment from external network changes, provides continuous internet egress across any physical Wi-Fi, and allows all lab VMs (`pro-win-server`, `pro-win-client`) to interconnect without interference.
+* **Limitations:** External physical devices cannot initiate connections into the VM without manual port forwarding rules configured in the VMware NAT settings.
+
+#### 3. Host-Only Mode (`VMnet1`) - "An Underground Bunker (Air-Gapped)"
+* **How it operates:** Creates an isolated virtual switch between the host operating system and guest virtual machines. There is **no default gateway** and no routing path to any physical network adapter.
+* **Real-World Analogy:** An underground bunker with zero telephone lines or windows to the outside world. People inside can only talk to each other.
+* **When to use:** **Cybersecurity sandboxing, malware analysis, and strictly isolated penetration testing.** Guarantees that hostile code, untested exploits, or misconfigured routing tables cannot accidentally leak onto the host LAN or public internet.
+* **Limitations:** No internet access whatsoever. VMs cannot download packages, update operating systems, or query public upstream resolvers (Cloudflare / Google).
+
+---
+
+### Engineering Recommendation for this Project:
+For this two-tier DNS and Active Directory infrastructure, **NAT Mode (`VMnet8`)** is selected because:
+1. It maintains an immutable static IP schema (`192.168.1.10`) regardless of whether the physical laptop travels between home, school, or mobile hotspots.
+2. It facilitates local DHCP delegation: disabling VMware's built-in DHCP on `VMnet8` allows the Windows Server VM to serve as the authoritative enterprise DHCP and Active Directory Domain Controller for all lab client VMs (`pro-win-client`).
+3. Outbound encrypted DoH traffic (TCP 443) passes transparently through the host's existing Wi-Fi socket without being blocked by campus firewall policies.

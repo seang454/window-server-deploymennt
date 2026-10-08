@@ -355,29 +355,42 @@ docker ps
 ### 1. Execution Steps
 
 #### Step 1: Complete Initial Setup Wizard
-1. Open browser: `http://localhost:3000` (or `http://192.168.100.50:3000`).
+1. Open browser: `http://localhost:3000` (or `http://192.168.1.10:3000`).
 2. Click **Get Started**.
 3. **Admin Web Interface:** Set listen port to `80` (mapped to `8080` outside).
 4. **DNS Server:** Set listen port to `53` (mapped to `5353` outside).
 5. Set **Admin Username** and **Password** ➔ Click **Next** ➔ **Finish**.
 
 #### Step 2: Configure Encrypted Upstream DNS
-1. Open AdGuard dashboard at `http://localhost:8080` and log in.
+1. Open AdGuard dashboard at `http://localhost:8080` (or `http://192.168.1.10:8080`) and log in.
 2. Go to **Settings** ➔ **DNS Settings**.
 3. Under **Upstream DNS servers**, clear default entries and paste:
    ```text
-   # Cloudflare DNS-over-HTTPS (Encrypted, fast in Cambodia)
-   https://dns.cloudflare.com/dns-query
+   # Cloudflare DNS-over-HTTPS via Direct IP (Bypasses UDP 53 blocking and domain bootstrap)
+   https://1.1.1.1/dns-query
 
-   # Google Public DNS (Fallback)
-   8.8.8.8
+   # Google DNS-over-HTTPS via Direct IP
+   https://8.8.8.8/dns-query
+
+   # Alternatively: DNS-over-TLS or TCP DNS
+   # tls://1.1.1.1
+   # tcp://1.1.1.1
    ```
-4. Scroll down and ensure **DHCP is disabled** (AdGuard DHCP is OFF by default).
-5. Click **Apply** and verify with **Test upstreams**.
+4. **Bootstrap DNS servers (Crucial Setting):**
+   * Scroll down the page to **"Bootstrap DNS servers"**.
+   * Replace the defaults with:
+     ```text
+     1.1.1.1
+     8.8.8.8
+     192.168.1.1
+     ```
+   * *Why?* If you use a domain name like `dns.cloudflare.com`, AdGuard must resolve the domain before connecting. If UDP 53 is blocked by your ISP or Docker NAT, bootstrapping fails. Using direct IP `https://1.1.1.1/dns-query` avoids this issue completely!
+5. Scroll down and ensure **DHCP is disabled** (AdGuard DHCP is OFF by default).
+6. Click **Apply** and verify with **Test upstreams** (it will now show green checkmarks!).
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why Cloudflare DoH (`https://dns.cloudflare.com/dns-query`)?**  
-  Standard DNS sends domain queries in plain text over UDP 53. Ezecom ISP can inspect and log every domain you visit. By using DNS-over-HTTPS, queries are encrypted with TLS 1.3 over TCP port 443. Ezecom only sees encrypted traffic to Cloudflare's IP (`1.1.1.1`), keeping your browsing private.
+  Standard DNS sends domain queries in plain text over UDP 53. ISPs can inspect and log every domain you visit. By using DNS-over-HTTPS, queries are encrypted with TLS 1.3 over TCP port 443. The ISP only sees encrypted traffic to Cloudflare's IP (`1.1.1.1`), keeping your browsing private.
 * **Why Google (`8.8.8.8`) as secondary fallback?**  
   If Cloudflare experiences an outage or fiber routing issue, AdGuard automatically falls back to Google DNS, ensuring high availability.
 * **Why keep AdGuard DHCP disabled?**  
@@ -396,14 +409,20 @@ Set-DnsServerForwarder -IPAddress 127.0.0.1 -PassThru
 
 #### Option B: Via DNS Manager GUI
 1. Open **DNS Manager** (`dnsmgmt.msc`).
-2. Right-click your server name (e.g., `WIN-SERVER`) ➔ Select **Properties**.
+2. Right-click your server name (e.g., `WIN-J17IMHCEMA9`) ➔ Select **Properties**.
 3. Click on the **Forwarders** tab ➔ Click **Edit...**
 4. Type `127.0.0.1` and press Enter.
 5. Click **OK** ➔ **Apply** ➔ **OK**.
 
+#### Post-Configuration: Switch Server DNS to Loopback
+Now that Windows DNS is running and forwarders are configured to AdGuard, point Windows Server's own network adapter to itself:
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("127.0.0.1")
+```
+
 ### 💡 Why we do this (Technical Rationale):
 * **Why configure a Forwarder?**  
-  Windows DNS knows all local records inside your domain (`*.itp.local`). However, when a client asks for `google.com` or `facebook.com`, Windows DNS says: *"I don't host that domain. Let me ask my Forwarder."*
+  Windows DNS knows all local records inside your domain (`*.e6.local` or `*.itp.local`). However, when a client asks for `google.com` or `facebook.com`, Windows DNS says: *"I don't host that domain. Let me ask my Forwarder."*
 * **Why point the forwarder to `127.0.0.1` (AdGuard)?**  
   This completes the hybrid chain. Unresolved external queries flow directly from Windows DNS into AdGuard Home, where ads and malware are stripped away before being securely encrypted to Cloudflare.
 
@@ -415,45 +434,51 @@ Set-DnsServerForwarder -IPAddress 127.0.0.1 -PassThru
 1. In **DNS Manager**, expand server name.
 2. Right-click **Forward Lookup Zones** ➔ Select **New Zone...**
 3. Select **Primary zone** ➔ Click **Next**.
-4. Zone Name: Type `itp.local` (or `rupp.local`) ➔ Click **Next** ➔ **Finish**.
-5. Right-click inside your new `itp.local` zone ➔ Select **New Host (A or AAAA)...**:
+4. Zone Name: Type `itp.local` (or your existing domain `e6.local`) ➔ Click **Next** ➔ **Finish**.
+5. Right-click inside your zone ➔ Select **New Host (A or AAAA)...**:
    * **Name:** `fileserver`
-   * **IP address:** `192.168.100.20`
+   * **IP address:** `192.168.1.50` (or `192.168.100.20` in Bridged Mode)
    * Click **Add Host**.
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why an Authoritative Zone?**  
-  This demonstrates the core power of Windows DNS: any query ending in `.itp.local` is answered immediately from the server's local database. It never leaves your network and never hits AdGuard or Ezecom, guaranteeing instant response times for internal servers.
+  This demonstrates the core power of Windows DNS: any query ending in `.itp.local` is answered immediately from the server's local database. It never leaves your network and never hits AdGuard or the internet, guaranteeing instant response times for internal servers.
 
 ---
 
 ## Phase 7: Verification & Testing Suite
 
-Run these tests in PowerShell to prove that each layer functions as designed:
+Run these tests in PowerShell on the **Windows Server VM** (or from client VM `pro-win-client`):
 
 ### Test 1: Verify Local Authoritative Resolution (Windows DNS)
 ```powershell
-nslookup fileserver.itp.local 192.168.100.50
+# For NAT Mode (192.168.1.10):
+nslookup fileserver.itp.local 192.168.1.10
+
+# For Bridged Mode (192.168.100.50):
+# nslookup fileserver.itp.local 192.168.100.50
 ```
-* **Expected Result:** Returns `192.168.100.20`.
+* **Expected Result:** Returns `192.168.1.50`.
 * **Rationale:** Proves local DNS resolves immediately without going to the internet.
 
 ### Test 2: Verify Internet Resolution (Cloudflare DoH via AdGuard)
 ```powershell
-nslookup google.com 192.168.100.50
+# For NAT Mode:
+nslookup google.com 192.168.1.10
 ```
 * **Expected Result:** Returns Google's public IP address.
 * **Rationale:** Proves Windows DNS successfully forwarded the request to AdGuard, and AdGuard retrieved the answer from Cloudflare DoH.
 
 ### Test 3: Verify Ad-Blocking & Threat Sinkhole
 ```powershell
-nslookup doubleclick.net 192.168.100.50
+# For NAT Mode:
+nslookup doubleclick.net 192.168.1.10
 ```
 * **Expected Result:** Returns `0.0.0.0` or `Name does not exist`.
 * **Rationale:** Proves AdGuard intercepted the known advertising domain and blocked it before it could load.
 
 ### Test 4: Inspect AdGuard Dashboard Query Log
-1. Go to `http://192.168.100.50:8080` and click **Query Log**.
+1. Go to `http://localhost:8080` (or `http://192.168.1.10:8080`) and click **Query Log**.
 2. Notice `google.com` is marked as **Processed** (encrypted) and `doubleclick.net` is marked in **RED as Blocked**.
 
 ---
