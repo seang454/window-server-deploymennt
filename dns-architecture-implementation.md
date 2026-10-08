@@ -414,11 +414,21 @@ Restart-Service DNS
 ```
 
 #### Step 2: Assign Secondary Dedicated IP (`192.168.1.11`) for AdGuard
-Add a secondary IP to `Ethernet0` so AdGuard has its own dedicated endpoint on port 53:
+Add a secondary IP to `Ethernet0` so AdGuard has its own dedicated endpoint on port 53.
 
+##### Option A: Via PowerShell
 ```powershell
 New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.1.11 -PrefixLength 24
 ```
+
+##### Option B: Via Windows GUI (`ncpa.cpl`)
+1. Press `Win + R`, type **`ncpa.cpl`**, and press **Enter**.
+2. Right-click **Ethernet0** ➔ **Properties**.
+3. Double-click **Internet Protocol Version 4 (TCP/IPv4)** ➔ Click **Advanced...**.
+4. Under **IP addresses**, click **Add...**.
+   * **IP address:** `192.168.1.11`
+   * **Subnet mask:** `255.255.255.0`
+5. Click **Add** ➔ **OK** ➔ **OK** ➔ **Close**.
 
 #### Step 3: Bind AdGuard to `192.168.1.11:53` in `docker-compose.yml`
 In `C:\adguard\docker-compose.yml`, bind AdGuard to the secondary IP on standard port 53:
@@ -522,25 +532,73 @@ nslookup doubleclick.net 192.168.1.10
 
 ---
 
-## Phase 8: Troubleshooting & Diagnostic Commands
+## Phase 8: Troubleshooting & Diagnostic Reference
 
-### 1. Check for Port Conflicts
-If Windows DNS or Docker fails to start:
+### 1. Diagnose Port 53 Listeners & Ownership
+If Docker throws a port collision error, inspect exactly which process owns port 53 across all IP addresses:
 ```powershell
-netstat -ano | findstr :53
-```
-* **Rationale:** Shows which PID (Process ID) is using port 53. Windows DNS should be listening on port 53; Docker AdGuard should be on port 5353.
+# Check UDP Port 53 listeners
+Get-NetUDPEndpoint -LocalPort 53 | Format-Table LocalAddress, LocalPort, OwningProcess
 
-### 2. Test AdGuard Port 5353 Directly
+# Check TCP Port 53 listeners
+Get-NetTCPConnection -LocalPort 53 | Format-Table LocalAddress, LocalPort, OwningProcess, State
+
+# Identify the process name by PID
+Get-Process -Id (Get-NetUDPEndpoint -LocalPort 53).OwningProcess -ErrorAction SilentlyContinue
+```
+* **Expected State:** 
+  * `192.168.1.10:53` ➔ Owned by `dns.exe` (Windows DNS).
+  * `127.0.0.1:53` ➔ Locked by `dns.exe` (Windows internal authentication).
+  * `192.168.1.11:53` ➔ Owned by `com.docker.backend.exe` (AdGuard Home).
+
+---
+
+### 2. Resolving Docker Bind Errors
+
+#### Error A: `bind: Only one usage of each socket address is normally permitted (127.0.0.1:53)`
+* **Root Cause:** Microsoft Windows DNS (`dns.exe`) retains a kernel-level lock on loopback `127.0.0.1:53` for Active Directory and Kerberos ticket issuance. It cannot be unbound.
+* **Solution:** Do not bind to `127.0.0.1`. Use the secondary IP `192.168.1.11:53` in `docker-compose.yml`.
+
+#### Error B: `listen udp4 192.168.1.11:53: can't bind on the specified endpoint`
+* **Root Cause:** The IP `192.168.1.11` does not exist on `Ethernet0`, or is still in `Tentative` state (ARP duplicate address detection).
+* **Solution:** Run `New-NetIPAddress -InterfaceAlias "Ethernet0" -IPAddress 192.168.1.11 -PrefixLength 24`. Verify with `ipconfig /all` that `192.168.1.11` shows `(Preferred)` before running `docker compose up -d`.
+
+---
+
+### 3. Inspect AdGuard Container Logs
+If upstream servers show red error banners:
 ```powershell
-Resolve-DnsName -Name google.com -Server 127.0.0.1 -Port 5353
+docker logs --tail 40 adguardhome
 ```
-* **Rationale:** Tests AdGuard in isolation to ensure the container is healthy independent of Windows DNS.
+* **Common Log Insights:**
+  * `x509: certificate expired / invalid` ➔ System clock drifted. Run `w32tm /resync /force`.
+  * `read: connection refused / timeout` ➔ Outbound UDP 53 blocked. Switch upstream to direct IP DoH: `https://1.1.1.1/dns-query`.
+  * `bootstrap DNS timeout` ➔ Clear default IPv6 addresses (`2620:fe::10`) in AdGuard Bootstrap DNS settings and enter `1.1.1.1`, `8.8.8.8`, `192.168.1.1`.
 
-### 3. Open Windows Firewall for Client Access
-If other computers cannot reach your DNS:
+---
+
+### 4. Direct Tier-by-Tier Testing
+
+```powershell
+# Test Tier 2 (AdGuard Docker) directly on standard port 53:
+nslookup google.com 192.168.1.11
+
+# Test Tier 1 (Windows DNS Server) on standard port 53:
+nslookup google.com 192.168.1.10
+
+# Test Local Zone Authority (Windows DNS):
+nslookup fileserver.itp.local 192.168.1.10
+
+# Test Ad Sinkhole (AdGuard):
+nslookup adservice.google.com 192.168.1.10
+```
+
+---
+
+### 5. Open Windows Firewall for Lab Clients
+If client VMs (`pro-win-client`) cannot reach Windows DNS or AdGuard:
 ```powershell
 New-NetFirewallRule -DisplayName "Inbound DNS (UDP 53)" -Direction Inbound -LocalPort 53 -Protocol UDP -Action Allow
 New-NetFirewallRule -DisplayName "Inbound DNS (TCP 53)" -Direction Inbound -LocalPort 53 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "AdGuard Web UI (TCP 8080)" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
 ```
-* **Rationale:** By default, Windows Server Firewall blocks inbound UDP port 53 traffic from external subnet clients.

@@ -99,11 +99,11 @@ flowchart TD
     subgraph VMnet8Subnet ["📦 VMware Private Subnet (192.168.1.0/24)"]
         ClientVM["💻 Client VM (pro-win-client)\n• IP: 192.168.1.20\n• Gateway: 192.168.1.1\n• Primary DNS: 192.168.1.10"]
 
-        subgraph ServerVM ["🪟 Windows Server (pro-win-server)\n• Static IP: 192.168.1.10\n• Gateway: 192.168.1.1"]
-            NativeDNS["🗄️ Tier 1: Windows DNS Server\n• Listening on: 192.168.1.10:53\n• Authoritative Zone: itp.local\n• Forwarder Target: 127.0.0.1:5353"]
-            AdGuardDocker["🛡️ Tier 2: AdGuard Home (Docker)\n• Container Port: 5353:53\n• Blocklists / Sinkhole (0.0.0.0)\n• Forwarder to https://dns.cloudflare.com/dns-query"]
+        subgraph ServerVM ["🪟 Windows Server (WIN-J17IMHCEMA9.e6.local)\n• Primary IP: 192.168.1.10\n• Secondary IP: 192.168.1.11\n• Gateway: 192.168.1.1"]
+            NativeDNS["🗄️ Tier 1: Windows DNS Server\n• Listening on: 192.168.1.10:53\n• Authoritative Zone: e6.local\n• Forwarder Target: 192.168.1.11:53"]
+            AdGuardDocker["🛡️ Tier 2: AdGuard Home (Docker)\n• Listening on: 192.168.1.11:53\n• Blocklists / Sinkhole (0.0.0.0)\n• Forwarder to https://1.1.1.1/dns-query"]
             
-            NativeDNS -- "Forward Unresolved (Loopback :5353)" --> AdGuardDocker
+            NativeDNS -- "Forward Unresolved (192.168.1.11:53)" --> AdGuardDocker
         end
 
         ClientVM -- "1. Standard UDP:53 Queries" --> NativeDNS
@@ -125,16 +125,16 @@ The following sequence details how the system arbitrates between internal record
 sequenceDiagram
     autonumber
     actor Client as 💻 Client Device (PC/Phone/VM)
-    participant WinDNS as 🗄️ Tier 1: Windows DNS (Port 53)
-    participant AdGuard as 🛡️ Tier 2: AdGuard Docker (Port 5353)
-    participant Ezecom as 📡 Ezecom Router (192.168.100.1)
-    participant Cloudflare as 🌐 Cloudflare Anycast (1.1.1.1:443)
+    participant WinDNS as 🗄️ Tier 1: Windows DNS (192.168.1.10:53)
+    participant AdGuard as 🛡️ Tier 2: AdGuard Docker (192.168.1.11:53)
+    participant Ezecom as 📡 Physical Gateway (192.168.1.1)
+    participant Cloudflare as 🌐 Cloudflare DoH (1.1.1.1:443)
 
     rect rgb(240, 245, 255)
     Note over Client, WinDNS: PATH A: Authoritative Local Resolution (Active Directory / Internal Lab)
-    Client->>WinDNS: 1. A-Record Query: "fileserver.itp.local"
-    WinDNS->>WinDNS: Evaluate local Authoritative Zone (*.itp.local)
-    WinDNS-->>Client: 2. Authoritative Response: "192.168.100.20"
+    Client->>WinDNS: 1. A-Record Query: "fileserver.e6.local"
+    WinDNS->>WinDNS: Evaluate local Authoritative Zone (*.e6.local)
+    WinDNS-->>Client: 2. Authoritative Response: "192.168.1.20"
     Note over WinDNS, AdGuard: AdGuard and Internet are completely bypassed! Zero latency.
     end
 
@@ -142,7 +142,7 @@ sequenceDiagram
     Note over Client, AdGuard: PATH B: Malicious / Advertisement Query
     Client->>WinDNS: 3. A-Record Query: "telemetry.ads.tracker.com"
     WinDNS->>WinDNS: Not in local zone -> send to Forwarder
-    WinDNS->>AdGuard: 4. Forward query over loopback to 127.0.0.1:5353
+    WinDNS->>AdGuard: 4. Forward query to 192.168.1.11:53
     AdGuard->>AdGuard: Match against Blocklists (AdGuard SDN / OISD / EasyList)
     AdGuard-->>WinDNS: 5. Response: 0.0.0.0 (Sinkhole / Blocked)
     WinDNS-->>Client: 6. Response: 0.0.0.0
@@ -153,7 +153,7 @@ sequenceDiagram
     Note over Client, Cloudflare: PATH C: Legitimate Internet Domain Resolution
     Client->>WinDNS: 7. A-Record Query: "github.com"
     WinDNS->>WinDNS: Not in local zone -> send to Forwarder
-    WinDNS->>AdGuard: 8. Forward query to 127.0.0.1:5353
+    WinDNS->>AdGuard: 8. Forward query to 192.168.1.11:53
     AdGuard->>AdGuard: Check in-memory DNS cache (Cache miss)
     
     Note over AdGuard, Cloudflare: Cryptographic Layer (DNS-over-HTTPS)
@@ -343,3 +343,128 @@ For this two-tier DNS and Active Directory infrastructure, **NAT Mode (`VMnet8`)
 1. It maintains an immutable static IP schema (`192.168.1.10`) regardless of whether the physical laptop travels between home, school, or mobile hotspots.
 2. It facilitates local DHCP delegation: disabling VMware's built-in DHCP on `VMnet8` allows the Windows Server VM to serve as the authoritative enterprise DHCP and Active Directory Domain Controller for all lab client VMs (`pro-win-client`).
 3. Outbound encrypted DoH traffic (TCP 443) passes transparently through the host's existing Wi-Fi socket without being blocked by campus firewall policies.
+
+---
+
+## 9. Port & IP Deconfliction Architecture: Windows DNS in Front vs. AdGuard in Front
+
+### 9.1 The Fundamental Port 53 Dilemma
+
+When co-hosting Native Windows DNS Server and a containerized DNS proxy (AdGuard Home) on the same operating system, two competing technical constraints emerge:
+
+1. **The Windows Forwarder Port Limitation:**  
+   In Windows Server DNS (`Set-DnsServerForwarder`), Microsoft hardcodes destination port `53`. Windows does not support specifying custom ports (e.g. `127.0.0.1:5353` causes a syntax error). Therefore, whatever service Windows forwards to **must listen on standard port 53**.
+2. **The Localhost Lock (`127.0.0.1:53`):**  
+   Even when Windows DNS is instructed to restrict its listening addresses (`dnscmd /resetlistenaddresses 192.168.1.10`), Microsoft’s `dns.exe` service refuses to release `127.0.0.1:53`. Windows Server retains an exclusive kernel socket on loopback for internal security processes (Kerberos ticket issuance, Netlogon, and local RPCs).
+3. **The Multi-IP Solution (Multihoming):**  
+   To resolve this without running a second physical or virtual machine, a **secondary IP address (`192.168.1.11`)** is added to `Ethernet0`. Windows DNS is bound strictly to `192.168.1.10:53`, freeing `192.168.1.11:53` completely for Docker.
+
+```text
+               Virtual Network Adapter (Ethernet0)
+              ┌─────────────────────────────────┐
+              │                                 │
+              ▼                                 ▼
+       [ 192.168.1.10 ]                  [ 192.168.1.11 ]
+              │                                 │
+              ▼                                 ▼
+   Native Windows DNS Server            AdGuard Home in Docker
+      (Port 53 TCP/UDP)                    (Port 53 TCP/UDP)
+```
+
+---
+
+### 9.2 Architecture Comparison: Why Windows DNS in Front?
+
+Network engineers often evaluate two placement models for this hybrid architecture:
+
+| Architectural Feature | Model A: Windows DNS First (Our Setup) | Model B: AdGuard First (Reverse Model) |
+| :--- | :---: | :---: |
+| **Topology** | Client ➔ Windows DNS (`.10`) ➔ AdGuard (`.11`) | Client ➔ AdGuard (`.10`) ➔ Windows DNS (`.11`) |
+| **Active Directory Dynamic DNS (DDNS)** | ✅ **Native & Fully Supported** | ❌ **Broken:** AdGuard drops dynamic update packets |
+| **Kerberos SRV Discovery** | ✅ Instantaneous, native response | ⚠️ Prone to timeouts or EDNS0 stripping |
+| **Domain Controller Fault Isolation** | ✅ **Resilient:** If Docker crashes, AD logins survive | 🛑 **Fatal:** If Docker restarts, entire domain drops |
+| **Client IP Granularity in Dashboard** | ⚠️ Queries appear from Server IP (`192.168.1.10`) | ✅ AdGuard sees each client IP (`192.168.1.20`) |
+| **Primary Domain Usage** | Enterprise / School Lab / Active Directory | Home Network / Simple Router Ad-blocking |
+
+#### The Technical Rationale for Model A:
+* **Dynamic DNS (DDNS) Compatibility:** When Windows domain clients (`pro-win-client`) join the domain or renew DHCP leases, they send secure dynamic DNS update requests to register their A and PTR records. AdGuard Home does not support RFC 2136 dynamic updates and drops these packets, breaking Active Directory name resolution.
+* **Service Dependency Decoupling:** In Model A, if Docker Desktop or WSL2 experiences high memory usage, a container update, or a crash, domain users can still log in, Kerberos tickets still authenticate, and local SMB file shares remain reachable.
+
+---
+
+### 9.3 Encrypted Upstream Mechanics: Direct IP DoH vs. Bootstrap DNS
+
+When configuring DNS-over-HTTPS (DoH) inside AdGuard Home, upstream server syntax dictates reliability:
+
+1. **Domain-Based DoH (`https://dns.cloudflare.com/dns-query`):**
+   * *The Chicken-and-Egg Problem:* AdGuard cannot connect to `dns.cloudflare.com` over HTTPS until it knows the IP address of `dns.cloudflare.com`.
+   * To find this IP, AdGuard must query its **Bootstrap DNS servers** (using plain UDP port 53).
+   * In networks where outbound UDP 53 is blocked, intercepted, or where default IPv6 bootstrap addresses (`2620:fe::10`) fail, domain resolution fails, causing the DoH connection to immediately throw a validation error.
+2. **Direct IP DoH (`https://1.1.1.1/dns-query` or `https://8.8.8.8/dns-query`):**
+   * *The Production Solution:* Because `1.1.1.1` and `8.8.8.8` are raw IP addresses, AdGuard bypasses bootstrap domain lookups entirely.
+   * AdGuard initiates a direct TCP connection over port `443` with TLS 1.3 encryption.
+   * Port 443 is universally permitted across campus Wi-Fi, mobile hotspots, and ISP firewalls, guaranteeing 100% uptime.
+
+---
+
+### 9.4 IP Multihoming Mechanics: How One NIC (`Ethernet0`) Binds Two IPs (`.10` & `.11`)
+
+A foundational networking question arises: *How can a single network card (`Ethernet0`) possess both `192.168.1.10` and `192.168.1.11` simultaneously?*
+
+#### 1. The Core Architecture: Layer 2 (MAC) vs. Layer 3 (IP)
+* **Layer 2 (Data Link):** The network adapter possesses a single, physical hardware address: `00:0C:29:52:24:C0` (MAC Address).
+* **Layer 3 (Network):** IP addresses are logical software constructs managed by the Windows TCP/IP stack.
+
+The TCP/IP specification allows a single Layer-2 MAC address to bind **multiple logical Layer-3 IP addresses**. This configuration is formally termed **IP Multihoming** or **Secondary IP Addressing**.
+
+```mermaid
+flowchart TD
+    subgraph L2Layer ["Layer 2: Physical / Virtual Hardware"]
+        NIC["Virtual Network Card (Ethernet0)\nHardware MAC: 00:0C:29:52:24:C0"]
+    end
+
+    subgraph L3Layer ["Layer 3: Windows TCP/IP Stack"]
+        IP10["Primary IP: 192.168.1.10\nSubnet Mask: 255.255.255.0"]
+        IP11["Secondary IP: 192.168.1.11\nSubnet Mask: 255.255.255.0"]
+    end
+
+    subgraph ServiceLayer ["Layer 4/7: Application Sockets (Port 53)"]
+        WinDNS["🗄️ Native Windows DNS Server\nSocket: 192.168.1.10:53"]
+        AdGuard["🛡️ AdGuard Home (Docker)\nSocket: 192.168.1.11:53"]
+    end
+
+    NIC <--> IP10
+    NIC <--> IP11
+    IP10 <--> WinDNS
+    IP11 <--> AdGuard
+```
+
+#### 2. Address Resolution Protocol (ARP) Flow
+When other machines on the subnet (e.g., `pro-win-client` at `192.168.1.20` or the VMware NAT Gateway at `192.168.1.1`) need to deliver packets, ARP handles the translation:
+
+```text
+Query 1: "Who has 192.168.1.10? Tell 192.168.1.20"
+Response: "192.168.1.10 is at 00:0C:29:52:24:C0 (Ethernet0)"
+
+Query 2: "Who has 192.168.1.11? Tell 192.168.1.20"
+Response: "192.168.1.11 is at 00:0C:29:52:24:C0 (Ethernet0)"
+```
+
+Because both ARP replies return the same MAC address (`00:0C:29:52:24:C0`), the VMware virtual switch directs packets for both `.10` and `.11` down the exact same virtual wire into `Ethernet0`. The Windows kernel then inspects the destination IP header:
+* Packets addressed to `192.168.1.10:53` are routed to `dns.exe` (Windows DNS).
+* Packets addressed to `192.168.1.11:53` are routed to `com.docker.backend.exe` (AdGuard Home).
+
+#### 3. Real-World Analogy: Two Names on One Apartment Mailbox
+* **The Apartment Door:** The physical network adapter (`Ethernet0`).
+* **The Mailbox:** The MAC address (`00:0C:29:52:24:C0`).
+* **The Residents:** **Alice** (`.10` / Windows DNS) and **Bob** (`.11` / AdGuard).
+* When mail arrives for Alice, the postman delivers it through the door to Windows DNS. When mail arrives for Bob, the postman drops it through the same door to AdGuard.
+
+#### 4. GUI Verification in Windows (`ncpa.cpl`)
+You can verify and view this multihoming configuration directly in the Windows graphical interface:
+1. Press `Win + R` ➔ type **`ncpa.cpl`** ➔ Enter.
+2. Right-click **Ethernet0** ➔ **Properties**.
+3. Select **Internet Protocol Version 4 (TCP/IPv4)** ➔ Click **Properties** ➔ Click **Advanced...**.
+4. In the **IP Settings** tab under **IP addresses**, both addresses appear:
+   * `192.168.1.10` (Mask: `255.255.255.0`)
+   * `192.168.1.11` (Mask: `255.255.255.0`)
