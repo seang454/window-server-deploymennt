@@ -4,6 +4,32 @@ This step-by-step implementation guide walks you through deploying a Windows Ser
 
 ---
 
+## Overview & Workflow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin
+    participant AWS as AWS VPC (DHCP Engine)
+    participant Client as EC2 Client (Win-Client-01)
+    participant DC as EC2 Domain Controller (10.0.1.10)
+    participant R53 as Route 53 Resolver (10.0.0.2)
+
+    Admin->>DC: 1. Deploy AD DS + DNS (cambodia.local)
+    Admin->>AWS: 2. Create DHCP Option Set (DNS: 10.0.1.10) & attach to VPC
+    Client->>AWS: 3. Instance boots & requests network config
+    AWS-->>Client: 4. Returns IP (10.0.1.50) + DNS (10.0.1.10) + Suffix (cambodia.local)
+    Client->>DC: 5. Query: Where is dc-server-01.cambodia.local?
+    DC-->>Client: 6. Returns 10.0.1.10 (Authoritative Answer)
+    Client->>DC: 7. Query: Where is google.com?
+    DC->>R53: 8. Forward to AmazonProvidedDNS (10.0.0.2)
+    R53-->>DC: 9. Returns Public IP
+    DC-->>Client: 10. Returns Public IP to Client
+    Client->>DC: 11. Add-Computer to cambodia.local (Kerberos join)
+```
+
+---
+
 ## Prerequisites
 * An AWS Account with permissions to create VPCs, Subnets, Security Groups, and EC2 instances.
 * A Key Pair (`.pem` or `.ppk`) for Windows Administrator password retrieval.

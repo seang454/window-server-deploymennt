@@ -16,42 +16,51 @@ The industry standard architecture is:
 
 ## 2. Architecture Diagram
 
+```mermaid
+flowchart TB
+    %% Styling Definitions
+    classDef aws fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:#FFFFFF,font-weight:bold;
+    classDef vpc fill:#EBF3FB,stroke:#147EBA,stroke-width:2px,stroke-dasharray: 4 4,color:#0B3C5D;
+    classDef subnet fill:#FFFFFF,stroke:#3B82F6,stroke-width:1.5px,color:#1E3A8A;
+    classDef server fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#F8FAFC;
+    classDef client fill:#334155,stroke:#10B981,stroke-width:2px,color:#F8FAFC;
+    classDef awsService fill:#F8FAFC,stroke:#F59E0B,stroke-width:2px,color:#B45309;
+
+    subgraph AWSCloud ["☁️ AWS Cloud (Region: ap-southeast-1)"]
+        
+        subgraph VPC ["🌐 Amazon VPC (10.0.0.0/16)"]
+            
+            subgraph DHCPOpt ["⚙️ VPC DHCP Option Set"]
+                DHCPOptInfo["<b>domain-name:</b> cambodia.local<br/><b>domain-name-servers:</b> 10.0.1.10, 10.0.0.2"]
+            end
+            
+            subgraph SubnetPriv ["🔒 Private Subnet (10.0.1.0/24)"]
+                
+                DC["<b>🖥️ Windows Domain Controller</b><br/>Role: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b><br/>Zone: cambodia.local"]:::server
+                
+                Client["<b>💻 Windows Member Instance</b><br/>Role: Workstation / App Server<br/>Private IP: <b>10.0.1.50</b> (AWS assigned)<br/>DNS: Points to 10.0.1.10"]:::client
+                
+            end
+            
+            Route53Res["<b>📡 Amazon Route 53 Resolver</b><br/>VPC DNS (10.0.0.2)<br/>AWS Native DHCP Service"]:::awsService
+            
+        end
+        
+        Internet["🌍 Public Internet / AWS Services"]:::aws
+    end
+
+    %% Flow connections
+    DHCPOpt -.->|Injected at boot via DHCP| Client
+    Client -->|1. DNS Query: dc.cambodia.local & Kerberos Auth (Port 53/88)| DC
+    DC -->|2. Forward unresolved external queries| Route53Res
+    Route53Res -->|3. Resolves public domains & AWS endpoints| Internet
+    Route53Res -.->|Assigns IP 10.0.1.50 without broadcast| Client
+
+    class VPC vpc;
+    class SubnetPriv subnet;
+    class DHCPOpt awsService;
 ```
-+--------------------------------------------------------------------------------------------------+
-|                                        AWS Region (e.g., ap-southeast-1)                        |
-|                                                                                                  |
-|  AWS VPC (10.0.0.0/16)                                                                           |
-|  DHCP Option Set:                                                                                |
-|    - domain-name: cambodia.local                                                                |
-|    - domain-name-servers: 10.0.1.10, AmazonProvidedDNS (10.0.0.2)                                |
-|                                                                                                  |
-|  +--------------------------------------------------------------------------------------------+  |
-|  | Subnet: Private / Corporate Subnet (10.0.1.0/24)                                           |  |
-|  |                                                                                            |  |
-|  |  +-------------------------------------+      +-----------------------------------------+  |  |
-|  |  | EC2 Instance: Windows DC / DNS Server |      | EC2 Instance: Windows Domain Member     |  |  |
-|  |  | Private IP: 10.0.1.10 (Fixed/Static)   |      | Private IP: 10.0.1.50 (Assigned by AWS) |  |  |
-|  |  | Roles: AD DS, DNS Server              |      | Role: Workstation / App Server          |  |  |
-|  |  |                                       |      |                                         |  |  |
-|  |  | Authoritative for:                    |      | Network Settings (via DHCP Option Set): |  |  |
-|  |  |   - cambodia.local                    |      |   - DNS 1: 10.0.1.10                    |  |  |
-|  |  | Forwarders:                           |      |   - DNS 2: 10.0.0.2                     |  |  |
-|  |  |   - 10.0.0.2 (Amazon Route 53)        |      |   - Domain Suffix: cambodia.local       |  |  |
-|  |  +-------------------------------------+      +-----------------------------------------+  |  |
-|  |                     ▲                                      │                               |  |
-|  |                     │                                      │                               |  |
-|  |                     +-------- DNS Queries / Kerberos ------+                               |  |
-|  |                                                                                            |  |
-|  +--------------------------------------------------------------------------------------------+  |
-|                                                                                                  |
-|  +--------------------------------------------------------------------------------------------+  |
-|  | Subnet: Public / Ingress Subnet (10.0.0.0/24)                                              |  |
-|  |  +-------------------------------------+                                                  |  |
-|  |  | Internet Gateway (IGW) / NAT Gateway |                                                  |  |
-|  |  +-------------------------------------+                                                  |  |
-|  +--------------------------------------------------------------------------------------------+  |
-+--------------------------------------------------------------------------------------------------+
-```
+
 
 ---
 
