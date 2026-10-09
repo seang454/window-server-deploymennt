@@ -557,21 +557,36 @@ nslookup WIN-J17IMHCEMA9.e6.local
 
 ---
 
-## Phase 6: Create Local Authoritative Zone (For Testing)
+## Phase 6: Local Authoritative Zone & Host Records (Testing)
+
+> [!NOTE]
+> **Active Directory Domain Controller Note:**  
+> If this server is already promoted to a Domain Controller (as shown by `e6.local` existing as an **Active Directory-Integrated Primary Zone**), **do NOT create a new zone!** Windows Server already created it automatically. Click **Cancel** on the New Zone Wizard and proceed directly to **Step 2 (Add Test Record)**.
 
 ### 1. Execution Steps
-1. In **DNS Manager**, expand server name.
-2. Right-click **Forward Lookup Zones** ➔ Select **New Zone...**
-3. Select **Primary zone** ➔ Click **Next**.
-4. Zone Name: Type `e6.local` ➔ Click **Next** ➔ **Finish**.
-5. Right-click inside your zone ➔ Select **New Host (A or AAAA)...**:
+
+#### Step 1: Check Existing Zone (or Create New if Standalone DNS)
+* **If `e6.local` already exists (AD DC):** Simply click on `e6.local` in the left tree.
+* **If on a standalone DNS server (No AD):**
+  1. In **DNS Manager**, expand server name.
+  2. Right-click **Forward Lookup Zones** ➔ Select **New Zone...**.
+  3. Select **Primary zone** ➔ Click **Next**.
+  4. Zone Name: Type `e6.local` ➔ Click **Next** ➔ **Finish**.
+
+#### Step 2: Add Test Host Record (`fileserver`)
+1. Click on the existing **`e6.local`** folder in the left pane.
+2. In the right pane (or right-click `e6.local`), select **New Host (A or AAAA)...**.
+3. Configure the test record:
    * **Name:** `fileserver`
-   * **IP address:** `192.168.1.50` (or `192.168.100.20` in Bridged Mode)
-   * Click **Add Host**.
+   * **IP address:** `192.168.1.50` (or your intended file server IP)
+   * Check **Create associated pointer (PTR) record** (optional).
+4. Click **Add Host** ➔ Click **OK** ➔ Click **Done**.
 
 ### 💡 Why we do this (Technical Rationale):
-* **Why an Authoritative Zone?**  
-  This demonstrates the core power of Windows DNS: any query ending in `.e6.local` is answered immediately from the server's local database. It never leaves your network and never hits AdGuard or the internet, guaranteeing instant response times for internal servers.
+* **Why does Active Directory create this zone automatically?**  
+  Active Directory relies on DNS for service discovery. When you promote a server to a Domain Controller, Windows automatically builds the AD-integrated zone with SRV records (`_msdcs`), allowing domain computers to locate login authenticators (Kerberos/LDAP).
+* **Why add an authoritative test record?**  
+  Adding `fileserver.e6.local` demonstrates that any query matching your internal namespace is answered immediately from Windows DNS without reaching AdGuard or the public internet.
 
 ---
 
