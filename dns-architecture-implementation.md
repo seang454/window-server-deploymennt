@@ -492,26 +492,38 @@ cd C:\adguard
 docker compose up -d
 ```
 
-#### Step 4: Configure Windows DNS Forwarder to AdGuard
-Now configure Windows DNS to forward all external queries to AdGuard on `192.168.1.11`:
+#### Step 4: Configure AdGuard Conditional Forwarding to Windows DNS
+> [!NOTE]
+> **Why Windows DNS cannot forward to AdGuard (Error 9552):**  
+> Running `Set-DnsServerForwarder -IPAddress 192.168.1.11` fails with `WIN32 9552 (DNS_ERROR_CANNOT_FORWARD_TO_SELF)` because Windows DNS refuses to forward to an IP that belongs to the local machine.  
+> **The Production Solution:** Let AdGuard handle the routing! AdGuard has no 9552 restriction.
+
+1. Open AdGuard dashboard: `http://localhost:8080/#dns`
+2. Under **Upstream DNS servers**, configure:
+   ```text
+   # Forward internal Active Directory queries to Windows DNS on .10
+   [/e6.local/]192.168.1.10:53
+
+   # Forward all public internet queries to Cloudflare & Google DoH
+   https://1.1.1.1/dns-query
+   https://8.8.8.8/dns-query
+   ```
+3. Click **Apply**.
+
+#### Step 5: Point Network Adapters & Client VMs to AdGuard (`192.168.1.11`)
+Now point Windows Server's own network adapter (and all client VMs like `pro-win-client`) to AdGuard:
 
 ```powershell
-Set-DnsServerForwarder -IPAddress 192.168.1.11 -PassThru
-```
-
-#### Step 5: Switch Windows Server Network Adapter DNS to Itself
-Point Windows Server's network adapter to Windows DNS:
-```powershell
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.168.1.10")
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.168.1.11")
 ```
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why assign a secondary IP (`192.168.1.11`)?**  
   Windows Server DNS (`dns.exe`) retains a low-level lock on loopback (`127.0.0.1:53`) for internal Windows security services (Kerberos/Active Directory). By assigning a secondary IP (`192.168.1.11`) to `Ethernet0` and restricting Windows DNS to `192.168.1.10`, port `53` on `192.168.1.11` is 100% available for Docker.
-* **Why point Windows DNS Forwarder to `192.168.1.11`?**  
-  Windows DNS Forwarders only query port `53`. Forwarding to `192.168.1.11` allows seamless communication without any port conflicts.
-* **Why point Ethernet0 DNS to `192.168.1.10`?**  
-  This ensures Windows Server and all domain services use the Windows DNS server as their primary resolver. Windows DNS resolves all internal domain records (`*.e6.local`) locally, and forwards all external internet queries (`google.com`, `github.com`) to AdGuard on `192.168.1.11:53` for ad-blocking and encrypted upstream resolution.
+* **Why does AdGuard forward to Windows DNS (`[/e6.local/]192.168.1.10:53`)?**  
+  This elegantly bypasses Microsoft's hardcoded Error 9552. AdGuard receives all incoming queries on standard port 53. If the query ends in `.e6.local`, AdGuard forwards it directly to Windows DNS on `.10`. If the query is an ad or tracker, AdGuard blocks it (`0.0.0.0`). If it is for the internet, AdGuard encrypts it to Cloudflare over port 443.
+* **Why point Ethernet0 DNS to `192.168.1.11`?**  
+  This ensures the Windows Server itself, background applications, and all client VMs enjoy network-wide ad blocking, encrypted upstream privacy, and instant resolution of internal Active Directory records.
 
 ---
 
