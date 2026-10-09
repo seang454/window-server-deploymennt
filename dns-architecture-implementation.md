@@ -737,6 +737,80 @@ nslookup adservice.google.com
 
 ---
 
+### Phase 7.2: Client VM Setup & End-to-End Verification (`pro-win-client`)
+
+This section guides configuring any separate client virtual machine (such as **`pro-win-client`**) to utilize the hybrid DNS infrastructure.
+
+#### 1. Architectural Prerequisites
+* **Same Network Segment:** Both `pro-win-server` and `pro-win-client` must be attached to the same VMware virtual adapter: **`VMnet8 (NAT)`**.
+* **Domain Membership Not Required:** The client VM does **NOT** need to join the Active Directory domain to use this DNS server. Any workgroup PC, Linux client, or mobile device on the subnet can use it.
+
+#### 2. Windows Server Firewall Configuration (Allow Port 53 Inbound)
+By default, Windows Server Firewall blocks inbound UDP Port 53 packets directed to third-party services like Docker.
+
+##### Option A: Via GUI (`wf.msc`)
+1. On the **Windows Server VM**, press `Win + R` ➔ type **`wf.msc`** ➔ press **Enter**.
+2. Click **Inbound Rules** ➔ click **New Rule...** (right panel).
+3. **Rule Type:** Select **Port** ➔ click **Next**.
+4. **Protocol and Ports:** Select **UDP**, type specific local port **`53`** ➔ click **Next**.
+5. **Action:** Select **Allow the connection** ➔ click **Next**.
+6. **Profile:** Ensure **Domain**, **Private**, and **Public** are checked ➔ click **Next**.
+7. **Name:** Type **`DNS Port 53 (UDP)`** ➔ click **Finish**.
+8. *(Repeat same steps for **TCP** port 53).*
+
+##### Option B: Via PowerShell (One-Liner on Windows Server)
+```powershell
+New-NetFirewallRule -DisplayName "Allow DNS Inbound (UDP 53)" -Direction Inbound -LocalPort 53 -Protocol UDP -Action Allow
+New-NetFirewallRule -DisplayName "Allow DNS Inbound (TCP 53)" -Direction Inbound -LocalPort 53 -Protocol TCP -Action Allow
+```
+
+#### 3. Configure Client VM Adapter (`ncpa.cpl`)
+On the **`pro-win-client`** machine:
+
+##### Option A: Via GUI (`ncpa.cpl`)
+1. Press `Win + R` ➔ type **`ncpa.cpl`** ➔ press **Enter**.
+2. Right-click **Ethernet0** ➔ select **Properties**.
+3. Double-click **Internet Protocol Version 4 (TCP/IPv4)**:
+   * **IP address:** `192.168.1.20`
+   * **Subnet mask:** `255.255.255.0`
+   * **Default gateway:** `192.168.1.1`
+   * **Preferred DNS server:** `192.168.1.11` *(AdGuard Home)*
+   * **Alternate DNS server:** *(leave completely blank)*
+   * Click **OK**.
+4. Double-click **Internet Protocol Version 6 (TCP/IPv6)**:
+   * Set to **Obtain DNS server address automatically** (or uncheck IPv6).
+   * Click **OK** ➔ click **Close**.
+
+##### Option B: Via PowerShell
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.168.1.11")
+```
+
+#### 4. Run Client Verification Suite
+In PowerShell on the **client machine (`pro-win-client`)**:
+
+```powershell
+# 1. Test Layer 3 Connectivity (Ping to Server & AdGuard IP)
+ping 192.168.1.10
+ping 192.168.1.11
+
+# 2. Test Active Directory Discovery (Resolves Domain Controller IPs)
+nslookup WIN-J17IMHCEMA9.e6.local
+
+# 3. Test Network-Wide Ad Blocking (Returns 0.0.0.0 Sinkhole)
+nslookup adservice.google.com
+
+# 4. Test Encrypted Public Internet Resolution (Cloudflare DoH)
+nslookup google.com
+```
+
+#### 5. Verify Live Queries in AdGuard Dashboard
+1. Open the AdGuard dashboard: `http://192.168.1.10:8080` (or `http://localhost:8080`).
+2. Navigate to **Query Log**.
+3. Confirm that queries originating from client IP **`192.168.1.20`** appear in real-time, categorized into **Processed** (green) and **Blocked** (red).
+
+---
+
 ## Phase 8: Troubleshooting & Diagnostic Reference
 
 ### 1. Diagnose Port 53 Listeners & Ownership
