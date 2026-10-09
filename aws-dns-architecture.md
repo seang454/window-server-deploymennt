@@ -51,9 +51,9 @@ flowchart TB
 
     %% Flow connections
     DHCPOpt -.->|Injected at boot via DHCP| Client
-    Client -->|1. DNS Query: dc.cambodia.local & Kerberos Auth (Port 53/88)| DC
+    Client -->|"1. DNS Query & Kerberos Auth (Port 53/88)"| DC
     DC -->|2. Forward unresolved external queries| Route53Res
-    Route53Res -->|3. Resolves public domains & AWS endpoints| Internet
+    Route53Res -->|3. Resolves public domains and AWS endpoints| Internet
     Route53Res -.->|Assigns IP 10.0.1.50 without broadcast| Client
 
     class VPC vpc;
