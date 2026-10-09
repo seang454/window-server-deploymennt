@@ -1,16 +1,12 @@
-# AWS Windows Active Directory & DNS Architecture Guide
+# AWS Windows Active Directory, DNS & AdGuard Home (Docker) Architecture Guide
 
 ## 1. Executive Summary & Design Principle
 
-When transitioning from an on-premises or VMware Workstation environment to **Amazon Web Services (AWS)**, traditional Layer 2 networking assumptions no longer apply:
+When architecting a modern, enterprise-grade hybrid environment on **Amazon Web Services (AWS)** that integrates **Windows Active Directory Domain Services (AD DS)**, **Windows DNS**, and **AdGuard Home (Docker)** for network-wide ad and tracker filtering:
 
-* **In VMware Workstation / Physical LAN:** Windows Server handles IP assignment (via DHCP broadcast queries `255.255.255.255`), DNS name resolution, and domain authentication.
-* **In AWS VPC:** AWS disables Layer 2 broadcast/multicast at the hypervisor level. AWS natively manages IP assignment across all subnets. 
-
-The industry standard architecture is:
-1. **IP Address Management (IPAM / DHCP):** Handled natively by **AWS VPC**.
-2. **Domain Controller & DNS Resolution:** Handled by **Windows Server EC2 (Active Directory Domain Services + DNS)**.
-3. **Glue Layer (Linking AWS DHCP to Windows DNS):** Configured via **AWS VPC DHCP Option Sets**.
+* **Layer 2 Broadcasts & DHCP:** AWS VPC natively manages IP allocation and network settings via **VPC DHCP Option Sets**. In-guest Windows DHCP server roles are not supported natively on AWS VPC.
+* **Internal Resolution & Active Directory:** Windows Server hosts the primary authoritative DNS zones (`cambodia.local`, `_msdcs`). Clients query Windows Server directly to preserve domain logon, Dynamic DNS (RFC 2136), and Kerberos authentication.
+* **External Resolution & Security Filtering (Architecture A - Recommended):** Windows DNS does not resolve public traffic directly; instead, it uses **DNS Forwarders** pointing to the **AdGuard Home container running in Docker**. AdGuard Home strips malware, ads, and telemetry, then queries upstream public resolvers (e.g., Cloudflare `1.1.1.1` or AWS Route 53 Resolver `10.0.0.2`).
 
 ---
 
@@ -23,6 +19,7 @@ flowchart TB
     classDef vpc fill:#EBF3FB,stroke:#147EBA,stroke-width:2px,stroke-dasharray: 4 4,color:#0B3C5D;
     classDef subnet fill:#FFFFFF,stroke:#3B82F6,stroke-width:1.5px,color:#1E3A8A;
     classDef server fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#F8FAFC;
+    classDef docker fill:#0284C7,stroke:#0369A1,stroke-width:2px,color:#FFFFFF;
     classDef client fill:#334155,stroke:#10B981,stroke-width:2px,color:#F8FAFC;
     classDef awsService fill:#F8FAFC,stroke:#F59E0B,stroke-width:2px,color:#B45309;
 
@@ -31,29 +28,33 @@ flowchart TB
         subgraph VPC ["🌐 Amazon VPC (10.0.0.0/16)"]
             
             subgraph DHCPOpt ["⚙️ VPC DHCP Option Set"]
-                DHCPOptInfo["<b>domain-name:</b> cambodia.local<br/><b>domain-name-servers:</b> 10.0.1.10, 10.0.0.2"]
+                DHCPOptInfo["<b>domain-name:</b> cambodia.local<br/><b>domain-name-servers:</b> 10.0.1.10"]
             end
             
             subgraph SubnetPriv ["🔒 Private Subnet (10.0.1.0/24)"]
                 
-                DC["<b>🖥️ Windows Domain Controller</b><br/>Role: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b><br/>Zone: cambodia.local"]:::server
+                Client["<b>💻 Windows Member Instance</b><br/>Role: Workstation / App Server<br/>Private IP: <b>10.0.1.50</b> (AWS DHCP)<br/>Primary DNS: 10.0.1.10"]:::client
+
+                DC["<b>🖥️ Windows Domain Controller</b><br/>Roles: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b> (Static ENI)<br/>Authoritative: cambodia.local"]:::server
                 
-                Client["<b>💻 Windows Member Instance</b><br/>Role: Workstation / App Server<br/>Private IP: <b>10.0.1.50</b> (AWS assigned)<br/>DNS: Points to 10.0.1.10"]:::client
+                DockerHost["<b>🐳 Docker Host Instance</b><br/>Role: AdGuard Home Container<br/>Private IP: <b>10.0.1.20</b><br/>Port 53 (DNS) & 3000/80 (Web UI)"]:::docker
                 
             end
             
-            Route53Res["<b>📡 Amazon Route 53 Resolver</b><br/>VPC DNS (10.0.0.2)<br/>AWS Native DHCP Service"]:::awsService
+            Route53Res["<b>📡 Amazon Route 53 Resolver</b><br/>VPC DNS (10.0.0.2)<br/>Native AWS DHCP Service"]:::awsService
             
         end
         
-        Internet["🌍 Public Internet / AWS Services"]:::aws
+        Internet["🌍 Public Internet & Upstream DNS<br/>(Cloudflare 1.1.1.1 / Google 8.8.8.8)"]:::aws
     end
 
     %% Flow connections
     DHCPOpt -.->|Injected at boot via DHCP| Client
-    Client -->|"1. DNS Query & Kerberos Auth (Port 53/88)"| DC
-    DC -->|2. Forward unresolved external queries| Route53Res
-    Route53Res -->|3. Resolves public domains and AWS endpoints| Internet
+    Client -->|"1. All DNS Queries (Port 53)"| DC
+    DC -->|"2a. Internal zone (cambodia.local): Authoritative reply"| Client
+    DC -->|"2b. External zone forwarder (google.com)"| DockerHost
+    DockerHost -->|"3. Filters ads, trackers & malware"| DockerHost
+    DockerHost -->|"4. Clean upstream queries"| Internet
     Route53Res -.->|Assigns IP 10.0.1.50 without broadcast| Client
 
     class VPC vpc;
@@ -61,70 +62,46 @@ flowchart TB
     class DHCPOpt awsService;
 ```
 
+---
+
+## 3. Query Flow Breakdown (Architecture A)
+
+| Step | Initiator | Target | Protocol / Port | Description |
+| :---: | :--- | :--- | :--- | :--- |
+| **1** | **Client (10.0.1.50)** | **DC (10.0.1.10)** | UDP/TCP 53 | Client always queries Windows DC directly (configured by VPC DHCP Option Set). |
+| **2A** | **DC (10.0.1.10)** | **Client (10.0.1.50)** | UDP/TCP 53 | If query matches `cambodia.local` or `_msdcs`, DC resolves it internally immediately. |
+| **2B** | **DC (10.0.1.10)** | **AdGuard (10.0.1.20)** | UDP/TCP 53 | If query is external (e.g. `youtube.com`), DC forwards it to AdGuard Home. |
+| **3** | **AdGuard (10.0.1.20)** | **Internal Filter Engine** | Internal | AdGuard checks query against blocklists. If blocked, returns `0.0.0.0`. |
+| **4** | **AdGuard (10.0.1.20)** | **Upstream (1.1.1.1 / 10.0.0.2)** | UDP 53 / DoH / DoT | Allowed requests are forwarded upstream to public resolvers or Route 53. |
+| **5** | **AdGuard** $\rightarrow$ **DC** $\rightarrow$ **Client** | — | UDP/TCP 53 | Clean resolved IP address is returned back to the client machine. |
 
 ---
 
-## 3. Core Components Breakdown
+## 4. Key Advantages of Architecture A
 
-### 3.1. AWS VPC & Subnetting
-* **CIDR Block:** `10.0.0.0/16` (allows scaling).
-* **Reserved IP Addresses:** In any AWS subnet, AWS reserves the first four IP addresses and the last IP address. For subnet `10.0.1.0/24`:
-  * `10.0.1.0`: Network address.
-  * `10.0.1.1`: VPC router.
-  * `10.0.1.2`: Reserved by AWS for DNS (AmazonProvidedDNS / Route 53 Resolver).
-  * `10.0.1.3`: Reserved by AWS for future use.
-  * `10.0.1.255`: Network broadcast address.
-* **Domain Controller Placement:** Allocate a static private IP inside the subnet (e.g., `10.0.1.10`).
-
-### 3.2. Windows Active Directory Domain Services (AD DS)
-* **Domain Name:** `cambodia.local` (or internal corporate FQDN).
-* **FSMO Roles:** Installed on the primary EC2 DC instance.
-* **Active Directory Integrated DNS:**
-  * Zone files are stored directly inside Active Directory and replicated automatically if a secondary Domain Controller is added.
-  * Dynamic updates are secured to domain members.
-
-### 3.3. Hybrid DNS Flow & Forwarders
-* When a domain client queries `server1.cambodia.local`:
-  1. The client queries `10.0.1.10` directly.
-  2. Windows DNS answers with the internal A record.
-* When a client queries an external internet address (e.g., `google.com`) or an AWS internal endpoint (`s3.amazonaws.com`):
-  1. The client queries `10.0.1.10`.
-  2. The Windows DNS server uses **DNS Forwarders** pointing to `10.0.0.2` (the VPC AmazonProvidedDNS resolver).
-  3. AWS resolves the internet or AWS internal endpoint name and returns the answer.
-
-### 3.4. AWS DHCP Option Sets
-* AWS provides native IP addressing via its hypervisor.
-* By customizing the **DHCP Option Set**, you inject custom network configurations into every newly launched EC2 instance:
-  * `domain-name-servers`: Points to `10.0.1.10` (Windows DC) and optionally `10.0.0.2` (fallback).
-  * `domain-name`: Appends `cambodia.local` as the default DNS search suffix.
+1. **Zero Domain Join Failures:** Active Directory relies extensively on hidden SRV records (`_ldap._tcp`, `_kerberos._udp`). Windows DNS handles these directly without third-party interference.
+2. **Native Dynamic DNS (DDNS):** When new Windows instances boot, their computer names and IPs automatically register into Windows DNS Manager via RFC 2136.
+3. **High Reliability / Fault Tolerance:** If the AdGuard Docker container is stopped or restarted, local domain logins, file shares, and Kerberos continue operating without interruption.
+4. **Centralized Ad-Blocking:** Every device on the network automatically receives filtered external DNS without needing local browser extensions or agent software.
 
 ---
 
-## 4. Security & Port Requirements (Security Groups)
+## 5. Security & Port Requirements (Security Groups)
 
-The following firewall ports must be open in the Domain Controller’s AWS Security Group for intra-VPC communication:
+### 5.1. Domain Controller (`sg-domain-controller`)
+* **Inbound from VPC (`10.0.0.0/16`):**
+  * DNS: Port `53` (UDP/TCP)
+  * Kerberos: Port `88` (UDP/TCP)
+  * LDAP / LDAPS: Port `389` / `636` (TCP/UDP)
+  * SMB: Port `445` (TCP)
+  * RPC Endpoint Mapper: Port `135` (TCP)
+  * Dynamic RPC: Ports `49152 - 65535` (TCP)
 
-| Traffic Type | Protocol | Port(s) | Purpose |
-| :--- | :--- | :--- | :--- |
-| **DNS** | UDP / TCP | 53 | Name resolution |
-| **Kerberos** | UDP / TCP | 88 | Authentication |
-| **RPC Endpoint Mapper** | TCP | 135 | Domain discovery & services |
-| **LDAP** | TCP / UDP | 389 | Directory search |
-| **LDAPS** | TCP | 636 | Secure Directory search |
-| **SMB / CIFS** | TCP | 445 | SYSVOL & Group Policy |
-| **Kerberos Password** | TCP / UDP | 464 | Password reset |
-| **Global Catalog** | TCP | 3268 / 3269 | Multi-domain forest queries |
-| **RPC Dynamic Ports** | TCP | 49152 - 65535 | Active Directory RPC communication |
-| **RDP (Admin Only)** | TCP | 3389 | Remote server management (bastion/VPN only) |
-
----
-
-## 5. Architectural Comparison: VMware vs. AWS
-
-| Feature | On-Premises / VMware Workstation | AWS VPC Enterprise Pattern |
-| :--- | :--- | :--- |
-| **Hypervisor Broadcast** | Supported (standard Layer 2 switch) | Dropped (Layer 3 software-defined network) |
-| **DHCP Server Role** | Installed on Windows Server | Provided natively by AWS VPC |
-| **Static IP Assignment** | Configured manually in Windows Network Adapter | Assigned via AWS Management Console / ENI properties |
-| **Secondary DC / HA** | Configured in separate VM / Host | Deployed in a separate **Availability Zone (AZ)** |
-| **External Forwarding** | Configured to ISP DNS or `8.8.8.8` | Configured to `10.0.0.2` (AmazonProvidedDNS) |
+### 5.2. Docker Host with AdGuard (`sg-adguard-docker`)
+* **Inbound from Domain Controller (`10.0.1.10/32`):**
+  * DNS: Port `53` (UDP/TCP)
+* **Inbound from Admin IP / Bastion:**
+  * Web Management UI: Port `80` / `3000` (TCP)
+  * SSH / Admin Access: Port `22` (TCP)
+* **Outbound to Internet (`0.0.0.0/0`):**
+  * DNS / DoT / DoH: Ports `53`, `853`, `443` (UDP/TCP)

@@ -1,10 +1,16 @@
-# AWS Windows Active Directory & DNS Implementation Guide
+# Full Implementation Guide: Windows Active Directory, DNS & AdGuard Home (Docker) on AWS
 
-This step-by-step implementation guide walks you through deploying a Windows Server 2022/2025 Domain Controller with Active Directory and DNS in an AWS VPC, and using AWS VPC DHCP Option Sets to manage client IP and DNS settings.
+This guide provides complete, production-grade instructions to build the end-to-end environment on AWS:
+1. Setting up the AWS VPC and Subnets.
+2. Launching and configuring an **AdGuard Home** container using Docker on Linux.
+3. Deploying a Windows Server EC2 instance as an **Active Directory Domain Controller and DNS Server**.
+4. Linking Windows DNS Forwarders to the AdGuard Home Docker instance (**Architecture A**).
+5. Setting up **AWS VPC DHCP Option Sets** to automatically distribute the setup to client instances.
+6. Verifying domain join, DNS resolution, and ad-filtering from a client machine.
 
 ---
 
-## Overview & Workflow
+## Architecture Flow Overview
 
 ```mermaid
 sequenceDiagram
@@ -12,98 +18,151 @@ sequenceDiagram
     actor Admin
     participant AWS as AWS VPC (DHCP Engine)
     participant Client as EC2 Client (Win-Client-01)
-    participant DC as EC2 Domain Controller (10.0.1.10)
-    participant R53 as Route 53 Resolver (10.0.0.2)
+    participant DC as Windows Server DC (10.0.1.10)
+    participant AG as Docker AdGuard (10.0.1.20)
+    participant Internet as Upstream DNS (Cloudflare / Route 53)
 
-    Admin->>DC: 1. Deploy AD DS + DNS (cambodia.local)
-    Admin->>AWS: 2. Create DHCP Option Set (DNS: 10.0.1.10) & attach to VPC
-    Client->>AWS: 3. Instance boots & requests network config
-    AWS-->>Client: 4. Returns IP (10.0.1.50) + DNS (10.0.1.10) + Suffix (cambodia.local)
-    Client->>DC: 5. Query: Where is dc-server-01.cambodia.local?
-    DC-->>Client: 6. Returns 10.0.1.10 (Authoritative Answer)
-    Client->>DC: 7. Query: Where is google.com?
-    DC->>R53: 8. Forward to AmazonProvidedDNS (10.0.0.2)
-    R53-->>DC: 9. Returns Public IP
-    DC-->>Client: 10. Returns Public IP to Client
-    Client->>DC: 11. Add-Computer to cambodia.local (Kerberos join)
+    Note over Admin,AG: Phase 1 & 2: Deploy AdGuard in Docker (10.0.1.20)
+    Note over Admin,DC: Phase 3 & 4: Deploy AD DS + DNS (10.0.1.10)
+    Admin->>DC: Set DNS Forwarder to 10.0.1.20 (AdGuard)
+    Admin->>AWS: Create DHCP Option Set (DNS: 10.0.1.10) & Attach to VPC
+
+    Client->>AWS: Instance boots & requests network settings
+    AWS-->>Client: Provides IP (10.0.1.50) + DNS (10.0.1.10) + Suffix (cambodia.local)
+    
+    rect rgb(230, 245, 255)
+        Note over Client,DC: Scenario 1: Internal Domain Resolution
+        Client->>DC: Query: dc.cambodia.local
+        DC-->>Client: Authoritative Answer: 10.0.1.10
+    end
+
+    rect rgb(240, 255, 240)
+        Note over Client,Internet: Scenario 2: External Resolution & Ad Filtering
+        Client->>DC: Query: ads.doubleclick.net or google.com
+        DC->>AG: Forward query to 10.0.1.20:53
+        AG->>AG: Filter: Block ad domains (returns 0.0.0.0)
+        AG->>Internet: Forward legitimate queries upstream
+        Internet-->>AG: Return resolved IP
+        AG-->>DC: Return filtered / clean response
+        DC-->>Client: Deliver response to Client
+    end
+
+    Client->>DC: Domain Join (Add-Computer -DomainName cambodia.local)
 ```
 
 ---
 
-## Prerequisites
-* An AWS Account with permissions to create VPCs, Subnets, Security Groups, and EC2 instances.
-* A Key Pair (`.pem` or `.ppk`) for Windows Administrator password retrieval.
-
----
-
-## Phase 1: Set Up the VPC and Networking
+## Phase 1: AWS VPC & Network Infrastructure Setup
 
 ### 1. Create the VPC
-1. Navigate to **VPC Console** > **Your VPCs** > **Create VPC**.
+1. Open the **AWS VPC Console** > **Your VPCs** > **Create VPC**.
 2. Settings:
    * **Name tag:** `lab-ad-vpc`
    * **IPv4 CIDR block:** `10.0.0.0/16`
 3. Click **Create VPC**.
 
-### 2. Create the Subnets
-Create at least one private/application subnet for your Domain Controller:
-* **Subnet Name:** `lab-private-subnet-a`
-* **VPC:** `lab-ad-vpc`
-* **Availability Zone:** Select any AZ (e.g., `us-east-1a` or `ap-southeast-1a`)
-* **IPv4 CIDR block:** `10.0.1.0/24`
-
-*(Optional)* Create a public subnet (`10.0.0.0/24`) attached to an Internet Gateway if you need direct RDP or internet access for lab updates.
-
----
-
-## Phase 2: Create Security Groups
-
-Create a Security Group named `sg-domain-controller`:
-1. In the **EC2 Console**, go to **Network & Security** > **Security Groups** > **Create security group**.
-2. Add Inbound Rules for VPC traffic (Source: `10.0.0.0/16`):
-   * **DNS (UDP/TCP):** Port `53`
-   * **Kerberos (UDP/TCP):** Port `88`
-   * **LDAP (TCP/UDP):** Port `389`
-   * **SMB (TCP):** Port `445`
-   * **RPC Endpoint Mapper (TCP):** Port `135`
-   * **Dynamic RPC Ports (TCP):** Ports `49152 - 65535`
-3. Add **RDP (TCP 3389)** strictly from your own trusted IP or Bastion host.
+### 2. Create the Subnet
+1. Go to **Subnets** > **Create subnet**.
+2. Settings:
+   * **VPC:** Select `lab-ad-vpc`
+   * **Subnet name:** `lab-private-subnet-a`
+   * **Availability Zone:** Choose any (e.g., `ap-southeast-1a`)
+   * **IPv4 CIDR block:** `10.0.1.0/24`
+3. Click **Create subnet**.
 
 ---
 
-## Phase 3: Launch and Configure the Domain Controller EC2 Instance
+## Phase 2: Deploy AdGuard Home on Docker (Linux EC2)
 
-> [!IMPORTANT]
-> In AWS, never change your primary IP address to static *inside the Windows Network Adapter settings* unless it matches the ENI private IP, or you may lock yourself out. Assign the static private IP via the AWS Console.
+### 1. Create AdGuard Security Group (`sg-adguard-docker`)
+Create a Security Group with the following inbound rules:
+* **Port 53 (UDP & TCP):** Source `10.0.1.10/32` (Only the Windows Domain Controller needs to send DNS queries here).
+* **Port 3000 & 80 (TCP):** Source `My IP` (For web administrative dashboard access).
+* **Port 22 (TCP):** Source `My IP` (SSH management).
 
-### 1. Launch the EC2 Instance
-1. Go to **EC2 Console** > **Launch Instances**.
-2. **Name:** `DC-Server-01`
-3. **AMI:** Microsoft Windows Server 2022 Base (or 2025 Base).
-4. **Instance Type:** `t3.medium` (minimum 2 vCPU, 4GB RAM recommended for AD DS).
-5. **Network Settings** (Click *Edit*):
+### 2. Launch the Linux EC2 Instance
+1. In the **EC2 Console**, launch an instance with **Amazon Linux 2023** or **Ubuntu 24.04 LTS**.
+2. **Instance type:** `t3.micro` or `t3.small`.
+3. Under **Network settings**:
    * **VPC:** `lab-ad-vpc`
-   * **Subnet:** `lab-private-subnet-a` (10.0.1.0/24)
-   * **Auto-assign public IP:** Enable (if public testing) or use Bastion/Session Manager.
-   * **Primary IP:** Set to **Custom IP** and enter `10.0.1.10`.
-   * **Security Group:** Select `sg-domain-controller`.
-6. Launch instance and decrypt the Administrator password using your Key Pair.
+   * **Subnet:** `lab-private-subnet-a`
+   * **Primary IP (Static ENI):** Specify **`10.0.1.20`**.
+   * **Security Group:** Select `sg-adguard-docker`.
+4. Launch and connect via SSH.
 
----
+### 3. Install Docker and Deploy AdGuard Home
+Run the following commands on your Linux instance:
 
-## Phase 4: Install AD DS & DNS on Windows Server
+```bash
+# Update system and install Docker
+sudo dnf update -y
+sudo dnf install -y docker
+sudo systemctl enable --now docker
+sudo usermod -aG docker ec2-user
 
-Connect to `DC-Server-01` via RDP and open **PowerShell as Administrator**:
+# Create persistent storage directories
+sudo mkdir -p /opt/adguardhome/work /opt/adguardhome/conf
 
-### Step 1: Install AD DS and DNS roles
-```powershell
-Install-WindowsFeature -Name AD-Domain-Services, DNS -IncludeManagementTools
+# Run AdGuard Home container
+sudo docker run -d \
+  --name adguard-home \
+  --restart unless-stopped \
+  -v /opt/adguardhome/work:/opt/adguardhome/work \
+  -v /opt/adguardhome/conf:/opt/adguardhome/conf \
+  -p 53:53/tcp -p 53:53/udp \
+  -p 3000:3000/tcp \
+  -p 80:80/tcp \
+  adguard/adguardhome:latest
 ```
 
-### Step 2: Promote to Domain Controller
-Run the following PowerShell script to create a new forest (replace domain name and passwords as desired):
+### 4. Complete AdGuard Initial Setup Wizard
+1. Open your browser and navigate to: `http://<Docker-Public-Or-Private-IP>:3000`
+2. Follow the setup wizard:
+   * **Admin Web Interface:** Set to listen on port `80` (or `3000`).
+   * **DNS Server:** Set to listen on `0.0.0.0:53` (All interfaces).
+   * Create your admin username and password.
+3. Log into the AdGuard Dashboard:
+   * Go to **Settings** > **DNS settings**.
+   * Under **Upstream DNS servers**, specify your preferred public resolvers or AWS VPC resolver:
+     ```text
+     https://dns.cloudflare.com/dns-query
+     1.1.1.1
+     10.0.0.2
+     ```
+   * Click **Apply**.
+
+---
+
+## Phase 3: Launch & Promote Windows Domain Controller
+
+### 1. Create Domain Controller Security Group (`sg-domain-controller`)
+Add inbound rules for VPC traffic (Source: `10.0.0.0/16`):
+* **DNS (UDP/TCP):** Port `53`
+* **Kerberos (UDP/TCP):** Port `88`
+* **LDAP (TCP/UDP):** Port `389`
+* **SMB (TCP):** Port `445`
+* **RPC Endpoint Mapper (TCP):** Port `135`
+* **Dynamic RPC Ports (TCP):** Ports `49152 - 65535`
+* **RDP (TCP 3389):** Restricted to your management IP.
+
+### 2. Launch Windows Server EC2
+1. Launch an EC2 instance with **Microsoft Windows Server 2022 Base**.
+2. **Instance type:** `t3.medium`.
+3. Under **Network settings**:
+   * **VPC:** `lab-ad-vpc`
+   * **Subnet:** `lab-private-subnet-a`
+   * **Primary IP (Static ENI):** Specify **`10.0.1.10`**.
+   * **Security Group:** Select `sg-domain-controller`.
+4. Decrypt password and connect via RDP.
+
+### 3. Install AD DS & DNS Roles
+Open PowerShell as Administrator on the Windows Server:
 
 ```powershell
+# 1. Install Windows Features
+Install-WindowsFeature -Name AD-Domain-Services, DNS -IncludeManagementTools
+
+# 2. Promote to new Forest / Domain Controller
 $domainName = "cambodia.local"
 $safeModePassword = ConvertTo-SecureString "P@ssw0rdLab2026!" -AsPlainText -Force
 
@@ -114,69 +173,85 @@ Install-ADDSForest `
     -SafeModeAdministratorPassword $safeModePassword `
     -Force:$true
 ```
-*The server will automatically reboot upon completion.*
+*The server will reboot automatically.*
 
 ---
 
-## Phase 5: Configure DNS Forwarders on Windows Server
+## Phase 4: Configure Windows DNS Forwarders to Point to AdGuard
 
-Log back into `DC-Server-01` after reboot. Configure Windows DNS to forward external queries to the AWS VPC resolver (`10.0.0.2` or base VPC network + 2):
+Once the Domain Controller restarts:
+1. Log into the DC via RDP.
+2. Open PowerShell as Administrator and configure the DNS Forwarder to forward all unresolved external queries to the **AdGuard Docker host (`10.0.1.20`)**:
 
 ```powershell
-# Set DNS forwarder to AWS AmazonProvidedDNS (VPC CIDR 10.0.0.0/16 -> 10.0.0.2)
-Set-DnsServerForwarder -IPAddress 10.0.0.2
+# Remove existing root hints/forwarders and set AdGuard IP as primary forwarder
+Set-DnsServerForwarder -IPAddress 10.0.1.20 -PassThru
 ```
 
+*(Alternatively via GUI)*:
+* Open **DNS Manager** (`dnsmgmt.msc`).
+* Right-click your server node > **Properties** > **Forwarders** tab.
+* Click **Edit**, enter `10.0.1.20`, and click **OK**.
+
 ---
 
-## Phase 6: Configure AWS DHCP Option Set
+## Phase 5: Configure AWS VPC DHCP Option Sets
 
-Now, instruct AWS to automatically distribute your Windows Server (`10.0.1.10`) as the DNS server for any EC2 instance in the VPC.
+We now instruct AWS VPC to tell all member EC2 instances that their primary DNS is `10.0.1.10` (Windows DC):
 
-1. Open the **AWS VPC Console**.
-2. In the navigation menu, select **DHCP option sets** > **Create DHCP option set**.
-3. Fill in the values:
-   * **Name tag:** `dopt-cambodia-local`
+1. Go to the **AWS VPC Console** > **DHCP option sets** > **Create DHCP option set**.
+2. Configure:
+   * **Name tag:** `dopt-cambodia-adguard`
    * **Domain name:** `cambodia.local`
-   * **Domain name servers:** `10.0.1.10, AmazonProvidedDNS`
-4. Click **Create DHCP option set**.
-
-### Attach to the VPC:
-1. Go to **Your VPCs**.
-2. Select `lab-ad-vpc`.
-3. Click **Actions** > **Edit VPC settings** (or **Edit DHCP option set**).
-4. Change the DHCP option set from default to `dopt-cambodia-local`.
-5. Click **Save**.
+   * **Domain name servers:** `10.0.1.10`
+3. Click **Create DHCP option set**.
+4. Attach to the VPC:
+   * Go to **Your VPCs** > Select `lab-ad-vpc`.
+   * Click **Actions** > **Edit VPC settings** (or **Edit DHCP option set**).
+   * Change DHCP option set to `dopt-cambodia-adguard`.
+   * Click **Save**.
 
 ---
 
-## Phase 7: Verification & Testing
+## Phase 6: Client Verification & Domain Join
 
 ### 1. Launch a Member Client Instance
-1. Launch a second EC2 instance (`Win-Client-01`) running Windows Server or Windows 10/11 AMI in `lab-private-subnet-a`.
-2. Do **not** touch its network adapter; keep it set to default DHCP.
+* Launch a Windows 10/11 or Windows Server instance (`Win-Client-01`) in `lab-private-subnet-a`.
+* Leave its network adapter set to default DHCP.
 
-### 2. Verify IP and DNS Assignment on Client
+### 2. Verify Network Leases on Client
 Log into `Win-Client-01` and run:
 
 ```powershell
 ipconfig /all
 ```
-**Expected Output:**
-* **IPv4 Address:** `10.0.1.x` (Leased automatically from AWS VPC)
+
+**Verification Checklist:**
+* **IPv4 Address:** `10.0.1.x` (Assigned by AWS VPC)
 * **Primary Connection-Specific DNS Suffix:** `cambodia.local`
 * **DNS Servers:** `10.0.1.10`
 
-### 3. Test DNS Resolution
+### 3. Verify DNS and Ad-Filtering
+Run the following test queries:
+
 ```powershell
+# Test 1: Internal Active Directory Resolution
 nslookup dc-server-01.cambodia.local
-nslookup amazon.com
+# Expected: Returns 10.0.1.10 from Windows DNS
+
+# Test 2: External Web Resolution
+nslookup google.com
+# Expected: Resolves public IP via AdGuard -> Upstream
+
+# Test 3: Ad-block Filtering Test
+nslookup doubleclick.net
+# Expected: Resolves to 0.0.0.0 (Blocked by AdGuard!)
 ```
 
-Both internal domain names and public internet addresses should resolve successfully.
+Check your **AdGuard Web Dashboard** (`http://10.0.1.20`). You will see query statistics reflecting the forwarded requests from Windows Server.
 
 ### 4. Join the Domain
 ```powershell
 Add-Computer -DomainName "cambodia.local" -Credential (Get-Credential) -Restart
 ```
-Provide the `cambodia\Administrator` credentials. The machine will reboot and will be a fully functional domain member inside AWS!
+Enter `cambodia\Administrator` and its password. The client machine will join the domain and restart automatically.
