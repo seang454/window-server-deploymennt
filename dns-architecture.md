@@ -403,6 +403,44 @@ WIN32 9552: DNS_ERROR_CANNOT_FORWARD_TO_SELF
 3. If the query matches an ad/tracker, AdGuard returns `0.0.0.0`.
 4. If the query is for the public internet (`google.com`), AdGuard encrypts it over port 443 to Cloudflare DoH.
 
+#### 9.2.1 Adapter DNS Configuration Guide (GUI & CLI)
+
+To point Windows Server or any client VM (`pro-win-client`) to AdGuard:
+
+##### Option A: Via Windows GUI (`ncpa.cpl`)
+1. **Open Network Connections GUI:**
+   * Press `Win + R` on your keyboard.
+   * Type **`ncpa.cpl`** and press **Enter**.
+   * Right-click **Ethernet0** ➔ select **Properties**.
+2. **Set IPv4 DNS to AdGuard (`192.168.1.11`):**
+   * Double-click **Internet Protocol Version 4 (TCP/IPv4)**.
+   * In the bottom section, select: **"Use the following DNS server addresses"**:
+     * **Preferred DNS server:** `192.168.1.11`
+     * **Alternate DNS server:** *(leave completely blank / empty)*
+   * Click **OK**.
+3. **Clear IPv6 `::1` (Crucial: Prevents Windows from Bypassing AdGuard!):**
+   * In that same *Ethernet0 Properties* window, double-click **Internet Protocol Version 6 (TCP/IPv6)**.
+   * Make sure it is set to **"Obtain DNS server address automatically"** (or uncheck the IPv6 checkbox entirely).
+   * Click **OK**, then click **Close**.
+
+##### Option B: Via PowerShell (Automated)
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.168.1.11")
+```
+
+##### 🧪 Verification Test in PowerShell (No IP Needed!):
+```powershell
+# 1. Tests through AdGuard -> Returns 0.0.0.0 (Ad Blocked!)
+nslookup adservice.google.com
+
+# 2. Tests through AdGuard -> Cloudflare DoH (Encrypted Internet!)
+nslookup google.com
+
+# 3. Tests through AdGuard -> Windows DNS .10 (Internal Domain!)
+nslookup WIN-J17IMHCEMA9.e6.local
+```
+*(Notice: `Address: 192.168.1.11` answers automatically as your default DNS resolver!)*
+
 ---
 
 ### 9.3 Encrypted Upstream Mechanics: Direct IP DoH vs. Bootstrap DNS

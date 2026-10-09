@@ -513,9 +513,39 @@ docker compose up -d
 #### Step 5: Point Network Adapters & Client VMs to AdGuard (`192.168.1.11`)
 Now point Windows Server's own network adapter (and all client VMs like `pro-win-client`) to AdGuard:
 
+##### Option A: Via PowerShell (Automated)
 ```powershell
 Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.168.1.11")
 ```
+
+##### Option B: Via Windows Graphical User Interface (GUI)
+1. **Open Network Connections GUI:**
+   * Press `Win + R` on your keyboard.
+   * Type **`ncpa.cpl`** and press **Enter**.
+   * Right-click **Ethernet0** ➔ select **Properties**.
+2. **Set IPv4 DNS to AdGuard (`192.168.1.11`):**
+   * Double-click **Internet Protocol Version 4 (TCP/IPv4)**.
+   * In the bottom section, select: **"Use the following DNS server addresses"**:
+     * **Preferred DNS server:** `192.168.1.11`
+     * **Alternate DNS server:** *(leave completely blank / empty)*
+   * Click **OK**.
+3. **Clear IPv6 `::1` (Crucial: Prevents Windows from Bypassing AdGuard!):**
+   * In that same *Ethernet0 Properties* window, double-click **Internet Protocol Version 6 (TCP/IPv6)**.
+   * Make sure it is set to **"Obtain DNS server address automatically"** (or uncheck the IPv6 checkbox entirely).
+   * Click **OK**, then click **Close**.
+
+##### 🧪 Step 5.1: Test in PowerShell (Notice: No IP Needed!):
+```powershell
+# 1. Tests through AdGuard -> Returns 0.0.0.0 (Ad Blocked!)
+nslookup adservice.google.com
+
+# 2. Tests through AdGuard -> Cloudflare DoH (Encrypted Internet!)
+nslookup google.com
+
+# 3. Tests through AdGuard -> Windows DNS .10 (Internal Domain!)
+nslookup WIN-J17IMHCEMA9.e6.local
+```
+*(Notice: `Address: 192.168.1.11` answers automatically as your default DNS resolver!)*
 
 ### 💡 Why we do this (Technical Rationale):
 * **Why assign a secondary IP (`192.168.1.11`)?**  
@@ -547,35 +577,53 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet0" -ServerAddresses ("192.16
 
 ## Phase 7: Verification & Testing Suite
 
-Run these tests in PowerShell on the **Windows Server VM** (or from client VM `pro-win-client`):
+Run these tests in PowerShell on the **Windows Server VM** (or from client VM `pro-win-client`). Because DNS was set to `192.168.1.11` in Step 5, you no longer need to type an IP address!
 
-### Test 1: Verify Local Authoritative Resolution (Windows DNS)
+### Test 1: Verify Active Directory & Local Domain Resolution (AdGuard ➔ Windows DNS)
 ```powershell
-# For NAT Mode (192.168.1.10):
-nslookup fileserver.e6.local 192.168.1.10
+# Queries default DNS (192.168.1.11) -> AdGuard forwards [/e6.local/] to Windows DNS (192.168.1.10:53)
+nslookup WIN-J17IMHCEMA9.e6.local
 ```
-* **Expected Result:** Returns `192.168.1.50`.
-* **Rationale:** Proves local DNS resolves immediately without going to the internet.
+* **Expected Result:** Returns addresses `192.168.1.10` and `192.168.1.11`.
+* **Rationale:** Proves AdGuard's conditional rule `[/e6.local/]192.168.1.10:53` correctly routes domain queries to Windows DNS, preserving full Active Directory integration without any loops.
 
 ### Test 2: Verify Internet Resolution (Cloudflare DoH via AdGuard)
 ```powershell
-# For NAT Mode:
-nslookup google.com 192.168.1.10
+# Queries default DNS (192.168.1.11) -> AdGuard resolves via Cloudflare DoH
+nslookup google.com
 ```
-* **Expected Result:** Returns Google's public IP address.
-* **Rationale:** Proves Windows DNS successfully forwarded the request to AdGuard, and AdGuard retrieved the answer from Cloudflare DoH.
+* **Expected Result:**
+  ```text
+  Server:  UnKnown
+  Address:  192.168.1.11
+
+  Non-authoritative answer:
+  Name:    google.com
+  Addresses: 142.250.4.139, 142.250.4.100, ...
+  ```
+* **Rationale:** Proves clean public internet queries are encrypted over TLS 1.3 / Port 443 via Cloudflare DoH (`https://1.1.1.1/dns-query`) in ~25ms.
 
 ### Test 3: Verify Ad-Blocking & Threat Sinkhole
 ```powershell
-# For NAT Mode:
-nslookup doubleclick.net 192.168.1.10
+# Queries default DNS (192.168.1.11) -> AdGuard blocks advertising / tracking domain
+nslookup adservice.google.com
 ```
-* **Expected Result:** Returns `0.0.0.0` or `Name does not exist`.
-* **Rationale:** Proves AdGuard intercepted the known advertising domain and blocked it before it could load.
+* **Expected Result:**
+  ```text
+  Server:  UnKnown
+  Address:  192.168.1.11
+
+  Non-authoritative answer:
+  Name:    adservice.google.com.e6.local
+  Addresses:  ::
+            0.0.0.0
+  ```
+* **Rationale:** Proves AdGuard intercepts known ad/telemetry domains at the DNS boundary and returns `0.0.0.0` before any web traffic can leave the machine.
 
 ### Test 4: Inspect AdGuard Dashboard Query Log
-1. Go to `http://localhost:8080` (or `http://192.168.1.10:8080`) and click **Query Log**.
-2. Notice `google.com` is marked as **Processed** (encrypted) and `doubleclick.net` is marked in **RED as Blocked**.
+1. Open `http://localhost:8080` (or `http://192.168.1.10:8080`) and click **Query Log**.
+2. Notice `google.com` is marked as **Processed** (encrypted upstream: `https://1.1.1.1/dns-query`).
+3. Notice `adservice.google.com` is highlighted in **RED as Blocked** (Rule: AdGuard DNS filter).
 
 ---
 
