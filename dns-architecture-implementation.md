@@ -499,16 +499,111 @@ docker compose up -d
 > **The Production Solution:** Let AdGuard handle the routing! AdGuard has no 9552 restriction.
 
 1. Open AdGuard dashboard: `http://localhost:8080/#dns`
-2. Under **Upstream DNS servers**, configure:
+2. Under **Upstream DNS servers**, paste the complete configuration:
    ```text
-   # Forward internal Active Directory queries to Windows DNS on .10
-   [/e6.local/]192.168.1.10:53
+   # Internal domain zones (with dots: FQDN)
+   [/e6.local/lab.internal/]192.168.1.10:53
 
-   # Forward all public internet queries to Cloudflare & Google DoH
+   # Single-label local machine names (without dots: e.g., ping fileserver)
+   [//]192.168.1.10:53
+
+   # Public Internet (Encrypted DNS-over-HTTPS via Direct IP)
    https://1.1.1.1/dns-query
    https://8.8.8.8/dns-query
    ```
 3. Click **Apply**.
+
+##### 🔍 Deep Dive: Understanding `[//]` vs. `[/e6.local/lab.internal/]` (Dots vs. No Dots)
+
+A foundational concept in AdGuard upstream routing is understanding how it differentiates between **Full Domain Names (FQDN)** and **Short Computer Names (Single-Label Hostnames)**:
+
+* **Domain Zones ALWAYS have dots:** `app.lab.internal` (2 dots), `WIN-J17IMHCEMA9.e6.local` (2 dots), `google.com` (1 dot).
+* **Short Computer Names have ZERO dots:** `app` (0 dots), `fileserver` (0 dots), `WIN-J17IMHCEMA9` (0 dots).
+
+###### 1. What `[//]192.168.1.10:53` Actually Does
+Notice there is **nothing between the slashes** (`//`). In AdGuard / dnsmasq syntax, an empty domain matches:
+> **"Match ONLY names with ZERO dots"** *(Single-label hostnames)*
+
+* `ping fileserver` ➔ **0 dots** ➔ Matches `[//]` ✅ (Forwarded to Windows DNS `.10`)
+* `ping app` ➔ **0 dots** ➔ Matches `[//]` ✅ (Forwarded to Windows DNS `.10`)
+* `app.lab.internal` ➔ **Has dots!** ➔ **IGNORED by `[//]`** ❌
+
+###### 2. What `[/e6.local/lab.internal/]` Actually Does
+Notice the names **are written between the slashes**. This tells AdGuard:
+> **"Match any query ending with `.e6.local` OR `.lab.internal`"**
+
+* `app.lab.internal` ➔ Ends with `.lab.internal` ➔ Matches ✅ (Forwarded to Windows DNS `.10`)
+* `WIN-J17IMHCEMA9.e6.local` ➔ Ends with `.e6.local` ➔ Matches ✅ (Forwarded to Windows DNS `.10`)
+* `google.com` ➔ Doesn't match ➔ Forwarded to Cloudflare DoH (`1.1.1.1`)
+
+###### 3. Why `[//]` Does NOT Mean "All Zones" (The # Comment Hazard!)
+If you comment out `# [/e6.local/lab.internal/]` thinking `[//]` catches everything:
+* When a device queries `app.lab.internal`, AdGuard sees dots.
+* It skips `[//]`.
+* It falls back to Cloudflare (`1.1.1.1`), which responds with `NXDOMAIN` (Does not exist!).
+* **Result:** Internal domain resolution breaks. You **MUST** keep both rules active.
+
+###### 4. How Both Work Together (Decision Flowchart)
+
+```text
+               ┌──────────────────────────────┐
+               │ Incoming DNS Query from VM   │
+               └──────────────┬───────────────┘
+                              │
+               ┌──────────────▼───────────────┐
+               │  Is it on the Ad Blocklist?  │───► YES ──► Return 0.0.0.0 (Blocked!)
+               └──────────────┬───────────────┘
+                              │ NO
+                              ▼
+        ┌───────────────────────────────────────────┐
+        │       Does it have NO DOTS (0 dots)?      │
+        │           (e.g., "app", "fileserver")     │
+        └─────────────┬─────────────────────────────┘
+                      │
+           ┌──────────┴──────────┐
+           │                     │
+        YES                      NO (It has dots!)
+           │                     │
+           ▼                     ▼
+┌──────────────────────┐  ┌──────────────────────────────────────────────┐
+│  MATCHES Rule 2:     │  │ Does it end with ".e6.local" or ".lab.internal"? │
+│  [//]                │  │ (e.g., "app.lab.internal", "dc.e6.local")     │
+└──────────┬───────────┘  └──────────────────────┬───────────────────────┘
+           │                                     │
+           │                          ┌──────────┴──────────┐
+           │                          │                     │
+           │                       YES                      NO
+           │                          │                     │
+           │                          ▼                     ▼
+           │               ┌──────────────────────┐  ┌──────────────────────┐
+           │               │  MATCHES Rule 1:     │  │  MATCHES Rule 3:     │
+           │               │  [/e6.local/.../]    │  │  Default Public DoH  │
+           │               └──────────┬───────────┘  └──────────┬───────────┘
+           │                          │                         │
+           ▼                          ▼                         ▼
+┌────────────────────────────────────────┐       ┌──────────────────────────┐
+│ FORWARD TO WINDOWS DNS (192.168.1.10)  │       │ FORWARD TO CLOUDFLARE    │
+│ (Internal Active Directory Database)   │       │ https://1.1.1.1/dns-query│
+└────────────────────────────────────────┘       └──────────────────────────┘
+```
+
+###### 5. Evaluation Matrix
+
+| What you type | Dots | Matches `[//]`? | Matches `[/e6.local/lab.internal/]`? | Destination Resolved |
+| :--- | :---: | :---: | :---: | :--- |
+| `nslookup app` | **0** | **✅ YES** | ❌ No | Windows DNS (`192.168.1.10`) |
+| `nslookup fileserver` | **0** | **✅ YES** | ❌ No | Windows DNS (`192.168.1.10`) |
+| `nslookup app.lab.internal` | **2** | ❌ **NO** | **✅ YES** | Windows DNS (`192.168.1.10`) |
+| `nslookup WIN-J17IMHCEMA9.e6.local` | **2** | ❌ **NO** | **✅ YES** | Windows DNS (`192.168.1.10`) |
+| `nslookup google.com` | **1** | ❌ **NO** | ❌ No | Cloudflare DoH (`1.1.1.1:443`) |
+
+###### 6. Step-by-Step Resolution Scenarios
+* **Scenario A: Full Domain Lookup (`nslookup app.lab.internal`):**
+  AdGuard checks `[//]` (skipped: contains dots) ➔ matches `[/lab.internal/]` ➔ forwards to Windows DNS `.10` ➔ returns `192.168.1.77`.
+* **Scenario B: Short Machine Name (`nslookup app` or `ping fileserver`):**
+  AdGuard checks `[//]` ➔ matches (zero dots) ➔ forwards to Windows DNS `.10` ➔ Windows DNS appends search suffix and returns `192.168.1.77`.
+* **Scenario C: Public Web Request (`nslookup google.com`):**
+  AdGuard checks `[//]` (no) ➔ checks local zones (no) ➔ encapsulates in TLS 1.3 over TCP 443 to Cloudflare DoH (`https://1.1.1.1/dns-query`) ➔ returns public IP in ~25ms.
 
 #### Step 5: Point Network Adapters & Client VMs to AdGuard (`192.168.1.11`)
 Now point Windows Server's own network adapter (and all client VMs like `pro-win-client`) to AdGuard:

@@ -441,6 +441,87 @@ nslookup WIN-J17IMHCEMA9.e6.local
 ```
 *(Notice: `Address: 192.168.1.11` answers automatically as your default DNS resolver!)*
 
+#### 9.2.2 Upstream Routing Engine: Dots vs. No Dots (`[//]` vs. FQDN)
+
+Inside AdGuard Home's **Upstream DNS servers** configuration (`http://localhost:8080/#dns`), we configure:
+
+```text
+# Internal domain zones (with dots: FQDN)
+[/e6.local/lab.internal/]192.168.1.10:53
+
+# Single-label local machine names (without dots: e.g., ping fileserver)
+[//]192.168.1.10:53
+
+# Public Internet (Encrypted DNS-over-HTTPS via Direct IP)
+https://1.1.1.1/dns-query
+https://8.8.8.8/dns-query
+```
+
+##### The Core Architectural Distinction:
+* **Domain Zones ALWAYS have dots:** `app.lab.internal` (2 dots), `WIN-J17IMHCEMA9.e6.local` (2 dots), `google.com` (1 dot).
+* **Short Computer Names have ZERO dots:** `app` (0 dots), `fileserver` (0 dots), `WIN-J17IMHCEMA9` (0 dots).
+
+##### Why `[//]` Does NOT Mean "All Zones":
+* **`[//]` (Empty between slashes):** Matches **ONLY queries with zero dots** (single-label names). When a device queries `app.lab.internal`, AdGuard sees dots and **skips `[//]`**.
+* If `[/e6.local/lab.internal/]` is commented out, queries with dots fall back to Cloudflare (`1.1.1.1`), which returns `NXDOMAIN` (resolution failure).
+* Therefore, **both rules are mandatory**:
+  1. `[/e6.local/lab.internal/]` handles **fully qualified domain names**.
+  2. `[//]` handles **short local machine names**.
+
+##### AdGuard Query Decision Flowchart:
+
+```text
+               ┌──────────────────────────────┐
+               │ Incoming DNS Query from VM   │
+               └──────────────┬───────────────┘
+                              │
+               ┌──────────────▼───────────────┐
+               │  Is it on the Ad Blocklist?  │───► YES ──► Return 0.0.0.0 (Blocked!)
+               └──────────────┬───────────────┘
+                              │ NO
+                              ▼
+        ┌───────────────────────────────────────────┐
+        │       Does it have NO DOTS (0 dots)?      │
+        │           (e.g., "app", "fileserver")     │
+        └─────────────┬─────────────────────────────┘
+                      │
+           ┌──────────┴──────────┐
+           │                     │
+        YES                      NO (It has dots!)
+           │                     │
+           ▼                     ▼
+┌──────────────────────┐  ┌──────────────────────────────────────────────┐
+│  MATCHES Rule 2:     │  │ Does it end with ".e6.local" or ".lab.internal"? │
+│  [//]                │  │ (e.g., "app.lab.internal", "dc.e6.local")     │
+└──────────┬───────────┘  └──────────────────────┬───────────────────────┘
+           │                                     │
+           │                          ┌──────────┴──────────┐
+           │                          │                     │
+           │                       YES                      NO
+           │                          │                     │
+           │                          ▼                     ▼
+           │               ┌──────────────────────┐  ┌──────────────────────┐
+           │               │  MATCHES Rule 1:     │  │  MATCHES Rule 3:     │
+           │               │  [/e6.local/.../]    │  │  Default Public DoH  │
+           │               └──────────┬───────────┘  └──────────┬───────────┘
+           │                          │                         │
+           ▼                          ▼                         ▼
+┌────────────────────────────────────────┐       ┌──────────────────────────┐
+│ FORWARD TO WINDOWS DNS (192.168.1.10)  │       │ FORWARD TO CLOUDFLARE    │
+│ (Internal Active Directory Database)   │       │ https://1.1.1.1/dns-query│
+└────────────────────────────────────────┘       └──────────────────────────┘
+```
+
+##### Query Routing Evaluation Table:
+
+| What you type | Dots | Matches `[//]`? | Matches `[/e6.local/lab.internal/]`? | Destination Resolved |
+| :--- | :---: | :---: | :---: | :--- |
+| `nslookup app` | **0** | **✅ YES** | ❌ No | Windows DNS (`192.168.1.10`) |
+| `nslookup fileserver` | **0** | **✅ YES** | ❌ No | Windows DNS (`192.168.1.10`) |
+| `nslookup app.lab.internal` | **2** | ❌ **NO** | **✅ YES** | Windows DNS (`192.168.1.10`) |
+| `nslookup WIN-J17IMHCEMA9.e6.local` | **2** | ❌ **NO** | **✅ YES** | Windows DNS (`192.168.1.10`) |
+| `nslookup google.com` | **1** | ❌ **NO** | ❌ No | Cloudflare DoH (`1.1.1.1:443`) |
+
 ---
 
 ### 9.3 Encrypted Upstream Mechanics: Direct IP DoH vs. Bootstrap DNS
