@@ -90,29 +90,67 @@ Create a Security Group with the following inbound rules:
    * **Security Group:** Select `sg-adguard-docker`.
 4. Launch and connect via SSH.
 
-### 3. Install Docker and Deploy AdGuard Home
-Run the following commands on your Linux instance:
+### 3. Install Docker Compose and Deploy AdGuard Home
 
+1. Connect to your Linux EC2 instance via SSH and install Docker with Docker Compose plugin:
 ```bash
-# Update system and install Docker
+# Update packages and install Docker
 sudo dnf update -y
-sudo dnf install -y docker
+sudo dnf install -y docker git
 sudo systemctl enable --now docker
 sudo usermod -aG docker ec2-user
 
-# Create persistent storage directories
-sudo mkdir -p /opt/adguardhome/work /opt/adguardhome/conf
+# Install Docker Compose Plugin (v2)
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Run AdGuard Home container
-sudo docker run -d \
-  --name adguard-home \
-  --restart unless-stopped \
-  -v /opt/adguardhome/work:/opt/adguardhome/work \
-  -v /opt/adguardhome/conf:/opt/adguardhome/conf \
-  -p 53:53/tcp -p 53:53/udp \
-  -p 3000:3000/tcp \
-  -p 80:80/tcp \
-  adguard/adguardhome:latest
+# Verify installation
+docker compose version
+```
+
+2. Create a project directory for AdGuard Home:
+```bash
+mkdir -p ~/adguard && cd ~/adguard
+mkdir -p work conf
+```
+
+3. Create the `docker-compose.yml` file:
+```bash
+cat << 'EOF' > docker-compose.yml
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: adguard-home
+    restart: unless-stopped
+    volumes:
+      - ./work:/opt/adguardhome/work
+      - ./conf:/opt/adguardhome/conf
+    ports:
+      # Plain DNS (UDP & TCP)
+      - "53:53/tcp"
+      - "53:53/udp"
+      # Initial setup wizard & Web GUI
+      - "3000:3000/tcp"
+      - "80:80/tcp"
+    networks:
+      - adguard-net
+
+networks:
+  adguard-net:
+    driver: bridge
+EOF
+```
+
+4. Start the AdGuard Home service:
+```bash
+docker compose up -d
+```
+
+5. Verify the container status:
+```bash
+docker compose ps
+docker compose logs -f
 ```
 
 ### 4. Complete AdGuard Initial Setup Wizard
