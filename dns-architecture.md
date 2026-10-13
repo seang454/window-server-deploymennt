@@ -24,42 +24,46 @@ A single DNS server cannot solve all three simultaneously out of the box:
 ## 2. High-Level Component Topology
 
 ```mermaid
-flowchart TD
-    subgraph Internet ["🌐 Public WAN"]
-        Cloudflare["Cloudflare Anycast DNS (1.1.1.1)\n• Endpoint: https://dns.cloudflare.com/dns-query\n• Port: 443 (TLS 1.3 / DoH)"]
-        Google["Google Public DNS (8.8.8.8)\n• Fallback Upstream Resolver"]
-    end
-
-    subgraph PhysicalEnvironment ["🏠 Physical Layer (Cambodia / Ezecom ISP)"]
-        EzecomGPON["📡 Ezecom GPON Router\n• Gateway IP: 192.168.100.1\n• Role: Physical L2/L3 Gateway\n• Sees only encrypted port 443 traffic"]
-        PhysicalHost["🖥️ Physical Host PC (Windows 10/11)\n• Runs VMware Workstation Pro / Player"]
-    end
+flowchart LR
+    %% Styling Definitions
+    classDef client fill:#ECFDF5,stroke:#10B981,stroke-width:1.5px,color:#064E3B;
+    classDef server fill:#EFF6FF,stroke:#3B82F6,stroke-width:1.5px,color:#1E3A8A;
+    classDef docker fill:#0F172A,stroke:#0EA5E9,stroke-width:2px,color:#F8FAFC;
+    classDef phys fill:#FFFBEB,stroke:#F59E0B,stroke-width:1.5px,color:#78350F;
+    classDef wan fill:#FAF5FF,stroke:#A855F7,stroke-width:1.5px,color:#581C87;
 
     subgraph VMwareLayer ["📦 VMware Virtualization (NAT VMnet8: 192.168.1.0/24)"]
-        subgraph WinServerVM ["🪟 Windows Server Guest OS (WIN-J17IMHCEMA9.e6.local)"]
-            
-            subgraph Tier1 ["Tier 1: Local & Directory Authority"]
-                WinDNS["🗄️ Native Windows DNS Server\n• Listening on: 192.168.1.10:53 (UDP/TCP)\n• Authoritative Zone: *.e6.local\n• Forwarder Target: 192.168.1.11:53"]
-            end
+        direction LR
 
-            subgraph Tier2 ["Tier 2: Filtering & Cryptographic Gateway"]
-                DockerDaemon["🐳 Docker Engine (WSL2 Backend)"]
-                AdGuard["🛡️ AdGuard Home Container\n• Listening on: 192.168.1.11:53 (UDP/TCP)\n• Web Management: 8080:80 (HTTP)\n• Upstream: https://1.1.1.1/dns-query"]
-                DockerDaemon --- AdGuard
-            end
+        ClientVM["<b>💻 Client Devices</b><br/>pro-win-client<br/>IP: <b>192.168.1.20</b><br/>DNS: 192.168.1.10"]:::client
 
-            WinDNS -- "Forward unresolved queries\n(Port 53 to 192.168.1.11)" --> AdGuard
+        subgraph WinServerVM ["🪟 Windows Server (WIN-J17IMHCEMA9.e6.local)"]
+            direction TB
+            WinDNS["<b>Tier 1: Native Windows DNS</b><br/>IP: <b>192.168.1.10:53</b> (UDP/TCP)<br/>Auth Zone: <b>*.e6.local</b><br/>Forwarder: 192.168.1.11:53"]:::server
+            AdGuard["<b>Tier 2: AdGuard Home Docker</b><br/>IP: <b>192.168.1.11:53</b><br/>Ad & Malware Sinkhole<br/>Upstream: Cloudflare DoH"]:::docker
+            WinDNS -->|"Forward External (:53)"| AdGuard
         end
 
-        ClientVM["💻 Client Devices / Lab VMs (pro-win-client)\n• IP: 192.168.1.20\n• Primary DNS: 192.168.1.10"]
     end
 
-    %% Network links
-    PhysicalHost --- EzecomGPON
-    EzecomGPON <--> Cloudflare
+    subgraph PhysicalEnvironment ["🏠 Physical Layer (Cambodia / Ezecom)"]
+        direction TB
+        PhysicalHost["<b>🖥️ Physical Host PC</b><br/>Windows 10/11 (VMware Host)"]:::phys
+        EzecomGPON["<b>📡 Ezecom GPON Router</b><br/>Gateway: <b>192.168.100.1</b><br/>Sees only DoH (Port 443)"]:::phys
+        PhysicalHost --- EzecomGPON
+    end
+
+    subgraph Internet ["🌐 Public WAN (TLS 1.3 DoH)"]
+        direction TB
+        Cloudflare["<b>Cloudflare DNS (1.1.1.1)</b><br/>https://dns.cloudflare.com/dns-query<br/>Port 443 (DoH)"]:::wan
+        Google["<b>Google DNS (8.8.8.8)</b><br/>Fallback Resolver"]:::wan
+    end
+
+    %% Network flows
+    ClientVM -->|"1. Port 53 Queries"| WinDNS
+    AdGuard -->|"2. Encrypted DoH (Port 443)"| EzecomGPON
+    EzecomGPON <-->|"3. TLS 1.3"| Cloudflare
     EzecomGPON <--> Google
-    ClientVM -- "Port 53 Queries" --> WinDNS
-    AdGuard -- "TLS Encrypted Packets (Port 443)" --> EzecomGPON
 ```
 
 ---
@@ -86,29 +90,43 @@ When deploying this architecture in VMware Workstation, network engineers must c
 In NAT mode, VMware acts as a private Layer-3 router with stateful packet inspection. The entire DNS resolution and ad-blocking chain functions without any dependency on external router configuration:
 
 ```mermaid
-flowchart TD
-    subgraph HostAndInternet ["🌐 External Network & Physical Host"]
-        PhysicalWiFi["📡 Physical Wi-Fi / Campus / Home Router\n• Dynamic IP (e.g., 10.1.79.209 or 192.168.100.4)"]
-        VMwareNAT["⚙️ VMware NAT Virtual Router (VMnet8)\n• Gateway: 192.168.1.1\n• Translates internal VM traffic to host socket"]
-        CloudflareDoH["🔒 Cloudflare DoH (1.1.1.1:443)\n• Upstream encrypted resolver"]
-        
-        PhysicalWiFi <--> CloudflareDoH
-        VMwareNAT <--> PhysicalWiFi
-    end
+flowchart LR
+    %% Styling Definitions
+    classDef client fill:#ECFDF5,stroke:#10B981,stroke-width:1.5px,color:#064E3B;
+    classDef server fill:#EFF6FF,stroke:#3B82F6,stroke-width:1.5px,color:#1E3A8A;
+    classDef docker fill:#0F172A,stroke:#0EA5E9,stroke-width:2px,color:#F8FAFC;
+    classDef nat fill:#FFFBEB,stroke:#F59E0B,stroke-width:1.5px,color:#78350F;
+    classDef wan fill:#FAF5FF,stroke:#A855F7,stroke-width:1.5px,color:#581C87;
 
     subgraph VMnet8Subnet ["📦 VMware Private Subnet (192.168.1.0/24)"]
-        ClientVM["💻 Client VM (pro-win-client)\n• IP: 192.168.1.20\n• Gateway: 192.168.1.1\n• Primary DNS: 192.168.1.10"]
+        direction LR
 
-        subgraph ServerVM ["🪟 Windows Server (WIN-J17IMHCEMA9.e6.local)\n• Primary IP: 192.168.1.10\n• Secondary IP: 192.168.1.11\n• Gateway: 192.168.1.1"]
-            NativeDNS["🗄️ Tier 1: Windows DNS Server\n• Listening on: 192.168.1.10:53\n• Authoritative Zone: e6.local\n• Forwarder Target: 192.168.1.11:53"]
-            AdGuardDocker["🛡️ Tier 2: AdGuard Home (Docker)\n• Listening on: 192.168.1.11:53\n• Blocklists / Sinkhole (0.0.0.0)\n• Forwarder to https://1.1.1.1/dns-query"]
-            
-            NativeDNS -- "Forward Unresolved (192.168.1.11:53)" --> AdGuardDocker
+        ClientVM["<b>💻 Client VM</b><br/>pro-win-client<br/>IP: <b>192.168.1.20</b><br/>Gateway: 192.168.1.1<br/>DNS: 192.168.1.10"]:::client
+
+        subgraph ServerVM ["🪟 Windows Server (WIN-J17IMHCEMA9.e6.local)"]
+            direction TB
+            NativeDNS["<b>Tier 1: Windows DNS</b><br/>IP: <b>192.168.1.10:53</b><br/>Auth: <b>e6.local</b><br/>Forwarder: 192.168.1.11:53"]:::server
+            AdGuardDocker["<b>Tier 2: AdGuard Docker</b><br/>IP: <b>192.168.1.11:53</b><br/>Sinkhole (0.0.0.0)<br/>Upstream: Cloudflare DoH"]:::docker
+            NativeDNS -->|"Forward Unresolved (:53)"| AdGuardDocker
         end
 
-        ClientVM -- "1. Standard UDP:53 Queries" --> NativeDNS
-        AdGuardDocker -- "2. Egress TLS Packets (Port 443)" --> VMwareNAT
     end
+
+    subgraph NATRouter ["⚙️ VMware NAT Router"]
+        VMwareNAT["<b>VMware NAT Gateway (VMnet8)</b><br/>IP: <b>192.168.1.1</b><br/>Stateful Packet Inspection<br/>Translates to Host Socket"]:::nat
+    end
+
+    subgraph ExternalWAN ["🌐 External Network & WAN"]
+        direction TB
+        PhysicalWiFi["<b>Physical Wi-Fi / Router</b><br/>Dynamic IP (e.g., 10.1.79.209)"]:::wan
+        CloudflareDoH["<b>Cloudflare DoH (1.1.1.1)</b><br/>Port: <b>443 (TLS 1.3)</b><br/>Encrypted Upstream"]:::wan
+        PhysicalWiFi <--> CloudflareDoH
+    end
+
+    %% Flow connections
+    ClientVM -->|"1. UDP:53 Queries"| NativeDNS
+    AdGuardDocker -->|"2. Egress TLS (Port 443)"| VMwareNAT
+    VMwareNAT <-->|"3. Outbound NAT"| PhysicalWiFi
 ```
 
 ### Architectural Verdict
