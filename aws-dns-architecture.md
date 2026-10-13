@@ -13,53 +13,50 @@ When architecting a modern, enterprise-grade hybrid environment on **Amazon Web 
 ## 2. Architecture Diagram
 
 ```mermaid
-flowchart TB
+flowchart LR
     %% Styling Definitions
     classDef aws fill:#FF9900,stroke:#232F3E,stroke-width:2px,color:#FFFFFF,font-weight:bold;
-    classDef vpc fill:#EBF3FB,stroke:#147EBA,stroke-width:2px,stroke-dasharray: 4 4,color:#0B3C5D;
+    classDef vpc fill:#F0F7FD,stroke:#0284C7,stroke-width:2px,stroke-dasharray: 4 4,color:#0B3C5D;
     classDef subnet fill:#FFFFFF,stroke:#3B82F6,stroke-width:1.5px,color:#1E3A8A;
     classDef server fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#F8FAFC;
     classDef docker fill:#0284C7,stroke:#0369A1,stroke-width:2px,color:#FFFFFF;
     classDef client fill:#334155,stroke:#10B981,stroke-width:2px,color:#F8FAFC;
-    classDef awsService fill:#F8FAFC,stroke:#F59E0B,stroke-width:2px,color:#B45309;
+    classDef awsService fill:#FFFBEB,stroke:#F59E0B,stroke-width:1.5px,color:#78350F;
 
     subgraph AWSCloud ["☁️ AWS Cloud (Region: ap-southeast-1)"]
-        
-        subgraph VPC ["🌐 Amazon VPC (10.0.0.0/16)"]
-            
-            subgraph DHCPOpt ["⚙️ VPC DHCP Option Set"]
-                DHCPOptInfo["<b>domain-name:</b> e6.local<br/><b>domain-name-servers:</b> 10.0.1.10"]
-            end
-            
-            subgraph SubnetPriv ["🔒 Private Subnet (10.0.1.0/24)"]
-                
-                Client["<b>💻 Windows Member Instance</b><br/>Role: Workstation / App Server<br/>Private IP: <b>10.0.1.50</b> (AWS DHCP)<br/>Primary DNS: 10.0.1.10"]:::client
 
-                DC["<b>🖥️ Windows Domain Controller</b><br/>Roles: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b> (Static ENI)<br/>Authoritative: e6.local"]:::server
-                
-                DockerHost["<b>🐳 Docker Host Instance</b><br/>Role: AdGuard Home Container<br/>Private IP: <b>10.0.1.20</b><br/>Port 53 (DNS) & 3000/80 (Web UI)"]:::docker
-                
+        subgraph VPC ["🌐 Amazon VPC (10.0.0.0/16)"]
+
+            subgraph Provisioning ["⚙️ AWS VPC Infrastructure"]
+                direction TB
+                DHCPOpt["<b>VPC DHCP Option Set</b><br/>domain-name: e6.local<br/>DNS: 10.0.1.10"]:::awsService
+                Route53Res["<b>Route 53 Resolver</b><br/>VPC DNS: 10.0.0.2<br/>Native IP Allocator"]:::awsService
             end
-            
-            Route53Res["<b>📡 Amazon Route 53 Resolver</b><br/>VPC DNS (10.0.0.2)<br/>Native AWS DHCP Service"]:::awsService
-            
+
+            subgraph SubnetPriv ["🔒 Private Subnet (10.0.1.0/24)"]
+                direction LR
+                Client["<b>💻 Windows Member Instance</b><br/>Role: Workstation / App Server<br/>Private IP: <b>10.0.1.50</b> (AWS DHCP)<br/>Primary DNS: 10.0.1.10"]:::client
+                DC["<b>🖥️ Windows Domain Controller</b><br/>Roles: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b> (Static ENI)<br/>Authoritative: e6.local"]:::server
+                DockerHost["<b>🐳 Docker Host Instance</b><br/>Role: AdGuard Home Filter<br/>Private IP: <b>10.0.1.20</b><br/>Port 53 (DNS) & 3000 (Web UI)"]:::docker
+            end
+
         end
-        
-        Internet["🌍 Public Internet & Upstream DNS<br/>(Cloudflare 1.1.1.1 / Google 8.8.8.8)"]:::aws
+
+        Internet["🌍 Public Internet & Upstream<br/>(Cloudflare 1.1.1.1 / Google 8.8.8.8)"]:::aws
     end
 
     %% Flow connections
     DHCPOpt -.->|Injected at boot via DHCP| Client
+    Route53Res -.->|Assigns IP 10.0.1.50| Client
     Client -->|"1. All DNS Queries (Port 53)"| DC
-    DC -->|"2a. Internal zone (e6.local): Authoritative reply"| Client
-    DC -->|"2b. External zone forwarder (google.com)"| DockerHost
+    DC -.->|"2a. Internal zone (e6.local): Auth reply"| Client
+    DC -->|"2b. External zone forwarder"| DockerHost
     DockerHost -->|"3. Filters ads, trackers & malware"| DockerHost
     DockerHost -->|"4. Clean upstream queries"| Internet
-    Route53Res -.->|Assigns IP 10.0.1.50 without broadcast| Client
 
     class VPC vpc;
     class SubnetPriv subnet;
-    class DHCPOpt awsService;
+    class Provisioning awsService;
 ```
 
 ---
