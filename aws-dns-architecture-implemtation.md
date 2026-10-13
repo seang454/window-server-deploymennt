@@ -70,7 +70,9 @@ sequenceDiagram
      1. Create VPC `lab-ad-vpc` with CIDR `10.0.0.0/16`.
      2. Go to **Subnets** ➔ **Create subnet** (`lab-private-subnet-a`, CIDR `10.0.1.0/24`).
      3. Go to **Internet gateways** ➔ **Create internet gateway** (`lab-igw`) ➔ **Actions** ➔ **Attach to VPC** (`lab-ad-vpc`).
-     4. Go to **Route tables** ➔ select your VPC's main route table ➔ **Routes** tab ➔ **Edit routes** ➔ **Add route**: Destination `0.0.0.0/0` ➔ Target **Internet Gateway (`lab-igw`)** ➔ **Save changes**.
+     4. Go to **Route tables** ➔ select your VPC's route table (`lab-ad-vpc`):
+        * **Routes tab:** Click **Edit routes** ➔ **Add route**: Destination `0.0.0.0/0` ➔ Target **Internet Gateway (`lab-igw`)** ➔ **Save changes**.
+        * **Subnet associations tab (CRUCIAL):** Click **Edit subnet associations** ➔ check the box for `lab-private-subnet-a` (`10.0.1.0/24`) ➔ click **Save associations**. *(Without this, the subnet cannot route out to the internet, causing SSH and package downloads to time out!)*
 
 ---
 
@@ -95,9 +97,12 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Custom UDP** | UDP | `53` | Custom | `10.0.1.10/32` | DNS queries from Windows DC |
 | **Custom TCP** | TCP | `53` | Custom | `10.0.1.10/32` | DNS queries from Windows DC |
-| **Custom TCP** | TCP | `3000` | My IP | *(Auto-fills your IP)* | AdGuard Initial Setup Wizard |
-| **Custom TCP** | TCP | `80` | My IP | *(Auto-fills your IP)* | AdGuard Web Admin Dashboard |
-| **SSH** | TCP | `22` | My IP | *(Auto-fills your IP)* | SSH Admin Access |
+| **Custom TCP** | TCP | `3000` | My IP / Anywhere | `My IP` (or `0.0.0.0/0`) | AdGuard Initial Setup Wizard |
+| **Custom TCP** | TCP | `80` | My IP / Anywhere | `My IP` (or `0.0.0.0/0`) | AdGuard Web Admin Dashboard |
+| **SSH** | TCP | `22` | My IP / Anywhere | `My IP` (or `0.0.0.0/0`) | SSH Admin Access |
+
+> [!TIP]
+> If your home or mobile internet IP address changes frequently, set SSH (22), Port 3000, and Port 80 to **Anywhere-IPv4 (`0.0.0.0/0`)** during the lab to prevent unexpected connection timeouts.
 
 4. **Outbound rules** (Keep AWS Default — Do NOT restrict!):
 
@@ -120,10 +125,10 @@ sequenceDiagram
    * Select **`t3.micro`** (or `t2.micro` / `t3.small`).
 5. **Key pair (login):**
    * Select your existing Key Pair, or click **Create new key pair**:
-     * **Key pair name:** `lab-key`
-     * **Key pair type:** `RSA`
+     * **Key pair name:** `dns` (or `lab-key`)
+     * **Key pair type:** `RSA` or `ED25519`
      * **Private key file format:** `.pem`
-     * Click **Create key pair** (save the downloaded `lab-key.pem` file safely).
+     * Click **Create key pair** (save the downloaded `.pem` file to `~/.ssh/`).
 6. **Network settings (IMPORTANT — Click the "Edit" button on the top-right of this box!):**
    * **VPC:** Select `lab-ad-vpc`.
    * **Subnet:** Select your subnet (`10.0.1.0/24`).
@@ -133,11 +138,13 @@ sequenceDiagram
      * Scroll down to **Primary IP** ➔ type **`10.0.1.20`**. *(This permanently locks the server's internal IP to `10.0.1.20`)*.
 7. **Configure storage:** Leave default (`8 GiB gp3`).
 8. Click **Launch instance**.
-9. **Connect via SSH:**
-   * Select the running `AdGuard-Docker-Host` instance ➔ click **Connect** (top-right) to use **EC2 Instance Connect** in your browser, or run from your laptop terminal:
-     ```bash
-     ssh -i "lab-key.pem" ec2-user@<Public-IPv4-Address>
+9. **Connect via SSH from Windows PowerShell:**
+   * Open PowerShell in your `.ssh` directory and ensure your key has safe permissions:
+     ```powershell
+     cd C:\Users\<YourUser>\.ssh
+     ssh -i "dns.pem" ec2-user@<Public-IPv4-Address>
      ```
+   * Type `yes` when prompted to store the host fingerprint.
 
 ---
 
@@ -150,6 +157,9 @@ sudo dnf update -y
 sudo dnf install -y docker git
 sudo systemctl enable --now docker
 sudo usermod -aG docker ec2-user
+
+# Apply docker group without logging out
+newgrp docker
 
 # Install Docker Compose Plugin (v2)
 sudo mkdir -p /usr/local/lib/docker/cli-plugins
