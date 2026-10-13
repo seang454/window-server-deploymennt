@@ -12,17 +12,36 @@
 This implementation guide provides complete, battle-tested step-by-step instructions (both Graphical User Interface and PowerShell) to deploy an enterprise-grade Windows DHCP Server integrated with our Two-Tier DNS Architecture (`192.168.1.10` Windows DNS + `192.168.1.11` AdGuard Home Docker).
 
 ```mermaid
-flowchart TD
-    P0["Phase 0: Disable VMware Built-in DHCP (Prevent Rogue Collision)"]
-    P1["Phase 1: Install Windows Server DHCP Role (dhcpserver)"]
-    P2["Phase 2: Authorize DHCP in Active Directory (AD DS Security)"]
-    P3["Phase 3: Create IPv4 Scope (192.168.1.100 - 192.168.1.200)"]
-    P4["Phase 4: Configure Scope Options (Router .1, DNS .11, Domain e6.local)"]
-    P5["Phase 5: Configure Dynamic DNS (DDNS Integration)"]
-    P6["Phase 6: Client VM Verification (pro-win-client to DHCP)"]
-    P7["Phase 7: Verify Leases in MMC & AdGuard Query Log"]
+flowchart LR
+    %% Styling Definitions
+    classDef prep fill:#FFFBEB,stroke:#F59E0B,stroke-width:1.5px,color:#78350F;
+    classDef scope fill:#EFF6FF,stroke:#3B82F6,stroke-width:1.5px,color:#1E3A8A;
+    classDef verify fill:#ECFDF5,stroke:#10B981,stroke-width:1.5px,color:#064E3B;
 
-    P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7
+    subgraph M1 ["1️⃣ Preparation & Authorization"]
+        direction TB
+        P0["<b>Phase 0</b><br/>Disable VMware DHCP<br/><i>Prevent Rogue Collision</i>"]:::prep
+        P1["<b>Phase 1</b><br/>Install DHCP Server Role<br/><i>Windows Feature: dhcpserver</i>"]:::prep
+        P2["<b>Phase 2</b><br/>Authorize in Active Directory<br/><i>AD DS Enterprise Security</i>"]:::prep
+        P0 --> P1 --> P2
+    end
+
+    subgraph M2 ["2️⃣ Scope & Integration"]
+        direction TB
+        P3["<b>Phase 3</b><br/>Create IPv4 Scope<br/><i>Pool: 192.168.1.100 - .200</i>"]:::scope
+        P4["<b>Phase 4</b><br/>Configure Scope Options<br/><i>Router .1 | DNS .11 | e6.local</i>"]:::scope
+        P5["<b>Phase 5</b><br/>Configure Dynamic DNS<br/><i>Automated DDNS in Win DNS</i>"]:::scope
+        P3 --> P4 --> P5
+    end
+
+    subgraph M3 ["3️⃣ Client Verification & Audit"]
+        direction TB
+        P6["<b>Phase 6</b><br/>Client VM Verification<br/><i>ipconfig /renew (pro-win-client)</i>"]:::verify
+        P7["<b>Phase 7</b><br/>Verify Leases & Query Logs<br/><i>MMC dhcpmgmt.msc & AdGuard</i>"]:::verify
+        P6 --> P7
+    end
+
+    M1 ==> M2 ==> M3
 ```
 
 ---
