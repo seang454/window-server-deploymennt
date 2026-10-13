@@ -115,9 +115,8 @@ mkdir -p ~/adguard && cd ~/adguard
 mkdir -p work conf
 ```
 
-3. Create the `docker-compose.yml` file:
-```bash
-cat << 'EOF' > docker-compose.yml
+3. Create the `docker-compose.yml` file (`~/adguard/docker-compose.yml`):
+```yaml
 services:
   adguardhome:
     image: adguard/adguardhome:latest
@@ -130,16 +129,21 @@ services:
       # Plain DNS (UDP & TCP)
       - "53:53/tcp"
       - "53:53/udp"
-      # Initial setup wizard & Web GUI
+      # Initial setup wizard (port 3000) & Web GUI (port 80)
       - "3000:3000/tcp"
       - "80:80/tcp"
+      # Optional: Encrypted DNS (DoT / DoH / QUIC) if needed later
+      # - "443:443/tcp"
+      # - "443:443/udp"
+      # - "853:853/tcp"
+      # - "853:853/udp"
+      # - "784:784/udp"
     networks:
       - adguard-net
 
 networks:
   adguard-net:
     driver: bridge
-EOF
 ```
 
 4. Start the AdGuard Home service:
