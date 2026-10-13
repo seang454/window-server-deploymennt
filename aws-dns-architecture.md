@@ -88,7 +88,7 @@ flowchart TB
 
 ## 5. Security & Port Requirements (Security Groups)
 
-### 5.1. Domain Controller (`sg-domain-controller`)
+### 5.1. Domain Controller (`domain-controller-sg`)
 * **Inbound from VPC (`10.0.0.0/16`):**
   * DNS: Port `53` (UDP/TCP)
   * Kerberos: Port `88` (UDP/TCP)
@@ -97,7 +97,7 @@ flowchart TB
   * RPC Endpoint Mapper: Port `135` (TCP)
   * Dynamic RPC: Ports `49152 - 65535` (TCP)
 
-### 5.2. Docker Host with AdGuard (`sg-adguard-docker`)
+### 5.2. Docker Host with AdGuard (`adguard-docker-sg`)
 * **Inbound from Domain Controller (`10.0.1.10/32`):**
   * DNS: Port `53` (UDP/TCP)
 * **Inbound from Admin IP / Bastion:**

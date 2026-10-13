@@ -76,16 +76,17 @@ sequenceDiagram
 
 ## Phase 2: Deploy AdGuard Home on Docker (Linux EC2)
 
-### 1. Create AdGuard Security Group (`sg-adguard-docker`)
+### 1. Create AdGuard Security Group (`adguard-docker-sg`)
 
 > [!CAUTION]
-> **Inbound vs. Outbound Rules Warning:**  
-> Make sure you add the port rules below under **Inbound rules** (traffic coming *into* your server), **NOT Outbound rules**!  
-> Leave **Outbound rules** at the AWS default (`All traffic` ➔ `0.0.0.0/0`) so your server can access the internet to download Docker and resolve upstream DNS.
+> **Inbound vs. Outbound Rules Warning & AWS Naming Rule:**  
+> 1. In AWS, Security Group names **cannot begin with `sg-`** (as `sg-` is reserved for AWS system IDs). Use **`adguard-docker-sg`**.  
+> 2. Add the port rules below under **Inbound rules** (traffic coming *into* your server), **NOT Outbound rules**!  
+> 3. Leave **Outbound rules** at the AWS default (`All traffic` ➔ `0.0.0.0/0`) so your server can access the internet to download Docker and resolve upstream DNS.
 
 1. Open **EC2 Console** ➔ **Network & Security** (left menu) ➔ **Security Groups** ➔ click **Create security group**.
 2. **Basic details:**
-   * **Security group name:** `sg-adguard-docker`
+   * **Security group name:** `adguard-docker-sg`
    * **Description:** `Allow DNS from DC and Web UI / SSH from Admin`
    * **VPC:** Select `lab-ad-vpc` (click the `X` on the default VPC first, then select your VPC).
 3. **Inbound rules** (Click **Add rule** for each row below):
@@ -127,7 +128,7 @@ sequenceDiagram
    * **VPC:** Select `lab-ad-vpc`.
    * **Subnet:** Select your subnet (`10.0.1.0/24`).
    * **Auto-assign public IP:** Select **Enable** *(Required so you can connect via SSH and open the AdGuard Web UI from your laptop)*.
-   * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`sg-adguard-docker`**.
+   * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`adguard-docker-sg`**.
    * **Advanced network configuration** *(Click the arrow at the bottom of Network settings to expand)*:
      * Scroll down to **Primary IP** ➔ type **`10.0.1.20`**. *(This permanently locks the server's internal IP to `10.0.1.20`)*.
 7. **Configure storage:** Leave default (`8 GiB gp3`).
@@ -227,11 +228,11 @@ sudo docker compose logs -f
 
 ## Phase 3: Launch & Promote Windows Domain Controller
 
-### 1. Create Domain Controller Security Group (`sg-domain-controller`)
+### 1. Create Domain Controller Security Group (`domain-controller-sg`)
 
 1. In the **EC2 Console**, go to **Security Groups** ➔ click **Create security group**.
 2. **Basic details:**
-   * **Security group name:** `sg-domain-controller`
+   * **Security group name:** `domain-controller-sg`
    * **Description:** `Active Directory and Windows DNS ports for VPC`
    * **VPC:** Select `lab-ad-vpc`.
 3. **Inbound rules** (Click **Add rule** for each row):
@@ -264,7 +265,7 @@ sudo docker compose logs -f
    * **VPC:** Select `lab-ad-vpc`.
    * **Subnet:** Select `lab-private-subnet-a` (`10.0.1.0/24`).
    * **Auto-assign public IP:** Select **Enable**.
-   * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`sg-domain-controller`**.
+   * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`domain-controller-sg`**.
    * **Advanced network configuration** *(Click to expand at the bottom)*:
      * Under **Primary IP**, enter **`10.0.1.10`**.
 7. **Configure storage:** Leave default (`30 GiB gp3`).
