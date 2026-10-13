@@ -28,14 +28,14 @@ flowchart TB
         subgraph VPC ["🌐 Amazon VPC (10.0.0.0/16)"]
             
             subgraph DHCPOpt ["⚙️ VPC DHCP Option Set"]
-                DHCPOptInfo["<b>domain-name:</b> cambodia.local<br/><b>domain-name-servers:</b> 10.0.1.10"]
+                DHCPOptInfo["<b>domain-name:</b> e6.local<br/><b>domain-name-servers:</b> 10.0.1.10"]
             end
             
             subgraph SubnetPriv ["🔒 Private Subnet (10.0.1.0/24)"]
                 
                 Client["<b>💻 Windows Member Instance</b><br/>Role: Workstation / App Server<br/>Private IP: <b>10.0.1.50</b> (AWS DHCP)<br/>Primary DNS: 10.0.1.10"]:::client
 
-                DC["<b>🖥️ Windows Domain Controller</b><br/>Roles: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b> (Static ENI)<br/>Authoritative: cambodia.local"]:::server
+                DC["<b>🖥️ Windows Domain Controller</b><br/>Roles: AD DS + DNS Server<br/>Private IP: <b>10.0.1.10</b> (Static ENI)<br/>Authoritative: e6.local"]:::server
                 
                 DockerHost["<b>🐳 Docker Host Instance</b><br/>Role: AdGuard Home Container<br/>Private IP: <b>10.0.1.20</b><br/>Port 53 (DNS) & 3000/80 (Web UI)"]:::docker
                 
@@ -51,7 +51,7 @@ flowchart TB
     %% Flow connections
     DHCPOpt -.->|Injected at boot via DHCP| Client
     Client -->|"1. All DNS Queries (Port 53)"| DC
-    DC -->|"2a. Internal zone (cambodia.local): Authoritative reply"| Client
+    DC -->|"2a. Internal zone (e6.local): Authoritative reply"| Client
     DC -->|"2b. External zone forwarder (google.com)"| DockerHost
     DockerHost -->|"3. Filters ads, trackers & malware"| DockerHost
     DockerHost -->|"4. Clean upstream queries"| Internet
@@ -69,7 +69,7 @@ flowchart TB
 | Step | Initiator | Target | Protocol / Port | Description |
 | :---: | :--- | :--- | :--- | :--- |
 | **1** | **Client (10.0.1.50)** | **DC (10.0.1.10)** | UDP/TCP 53 | Client always queries Windows DC directly (configured by VPC DHCP Option Set). |
-| **2A** | **DC (10.0.1.10)** | **Client (10.0.1.50)** | UDP/TCP 53 | If query matches `cambodia.local` or `_msdcs`, DC resolves it internally immediately. |
+| **2A** | **DC (10.0.1.10)** | **Client (10.0.1.50)** | UDP/TCP 53 | If query matches `e6.local` or `_msdcs`, DC resolves it internally immediately. |
 | **2B** | **DC (10.0.1.10)** | **AdGuard (10.0.1.20)** | UDP/TCP 53 | If query is external (e.g. `youtube.com`), DC forwards it to AdGuard Home. |
 | **3** | **AdGuard (10.0.1.20)** | **Internal Filter Engine** | Internal | AdGuard checks query against blocklists. If blocked, returns `0.0.0.0`. |
 | **4** | **AdGuard (10.0.1.20)** | **Upstream (1.1.1.1 / 10.0.0.2)** | UDP 53 / DoH / DoT | Allowed requests are forwarded upstream to public resolvers or Route 53. |

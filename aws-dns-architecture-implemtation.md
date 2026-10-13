@@ -348,14 +348,14 @@ You can install Active Directory and DNS using either the **Windows Server Manag
 2. Click **"Promote this server to a domain controller"**.
 3. **Deployment Configuration:**
    * Select **Add a new forest**.
-   * **Root domain name:** Type `cambodia.local` (or `e6.local`).
+   * **Root domain name:** Type **`e6.local`**.
    * Click **Next**.
 4. **Domain Controller Options:**
    * Ensure ✅ **Domain Name System (DNS) server** and ✅ **Global Catalog (GC)** are checked.
    * Enter and confirm a **Directory Services Restore Mode (DSRM) password** (e.g., `P@ssw0rdLab2026!`).
    * Click **Next**.
 5. **DNS Options:** Click **Next** (ignore the delegation warning; this is a new root forest).
-6. **Additional Options:** Verify the **NetBIOS domain name** (`CAMBODIA`) ➔ Click **Next**.
+6. **Additional Options:** Verify the **NetBIOS domain name** (**`E6`**) ➔ Click **Next**.
 7. **Paths:** Keep default database, log, and SYSVOL folders ➔ Click **Next**.
 8. **Review Options & Prerequisites Check:**
    * Click **Next** and wait for the prerequisite validation to show a green checkmark (*"All prerequisite checks passed successfully"*).
@@ -372,12 +372,12 @@ Open **PowerShell as Administrator** on the Windows Server:
 Install-WindowsFeature -Name AD-Domain-Services, DNS -IncludeManagementTools
 
 # 2. Promote to new Forest / Domain Controller
-$domainName = "cambodia.local"
+$domainName = "e6.local"
 $safeModePassword = ConvertTo-SecureString "P@ssw0rdLab2026!" -AsPlainText -Force
 
 Install-ADDSForest `
     -DomainName $domainName `
-    -DomainNetbiosName "CAMBODIA" `
+    -DomainNetbiosName "E6" `
     -InstallDns:$true `
     -SafeModeAdministratorPassword $safeModePassword `
     -Force:$true
@@ -388,7 +388,7 @@ Install-ADDSForest `
 
 ## Phase 4: Configure Windows DNS Forwarders & Zones (Pointing to AdGuard)
 
-Once the Domain Controller restarts, log back into `DC-Server-01` via RDP using `CAMBODIA\Administrator`.
+Once the Domain Controller restarts, log back into `DC-Server-01` via RDP using **`E6\Administrator`**.
 
 ### 1. Configure DNS Forwarder to AdGuard (`10.0.1.20`)
 
@@ -443,18 +443,18 @@ Add-DnsServerResourceRecordA -ZoneName "cambodia.com" -Name "web" -IPv4Address "
 
 ## Phase 5: Configure AWS VPC DHCP Option Sets
 
-We now instruct AWS VPC to tell all member EC2 instances that their primary DNS is `10.0.1.10` (Windows DC):
+We now instruct AWS VPC to tell all member EC2 instances that their primary DNS is `10.0.1.10` (Windows DC) and domain suffix is `e6.local`:
 
 1. Go to the **AWS VPC Console** > **DHCP option sets** > **Create DHCP option set**.
 2. Configure:
-   * **Name tag:** `dopt-cambodia-adguard`
-   * **Domain name:** `cambodia.local`
+   * **Name tag:** `dopt-e6-adguard`
+   * **Domain name:** `e6.local`
    * **Domain name servers:** `10.0.1.10`
 3. Click **Create DHCP option set**.
 4. Attach to the VPC:
    * Go to **Your VPCs** > Select `lab-ad-vpc`.
    * Click **Actions** > **Edit VPC settings** (or **Edit DHCP option set**).
-   * Change DHCP option set to `dopt-cambodia-adguard`.
+   * Change DHCP option set to `dopt-e6-adguard`.
    * Click **Save**.
 
 ---
@@ -487,7 +487,7 @@ To test DNS and domain joining, launch a second Windows instance:
 4. Verify:
    * **DHCP Enabled:** `Yes`
    * **IPv4 Address:** `10.0.1.x` (Assigned by AWS VPC)
-   * **Connection-specific DNS Suffix:** `cambodia.local`
+   * **Connection-specific DNS Suffix:** `e6.local`
    * **IPv4 DNS Server:** `10.0.1.10`
 
 #### Option B: Via Command Prompt / PowerShell
@@ -502,7 +502,7 @@ Open PowerShell or Command Prompt on the client and run:
 
 ```powershell
 # Test 1: Internal Active Directory Resolution
-nslookup dc-server-01.cambodia.local
+nslookup dc-server-01.e6.local
 # Expected: Returns 10.0.1.10 from Windows DNS
 
 # Test 2: Custom Zone Resolution
@@ -528,17 +528,18 @@ Check your **AdGuard Web Dashboard** (`http://10.0.1.20`). You will see query st
 1. Press `Win + R`, type **`sysdm.cpl`**, and press **Enter** (this opens **System Properties**).
 2. Under the **Computer Name** tab, click the **Change...** button.
 3. Under **Member of**, select **Domain:** and type:
-   * **`cambodia.local`**
+   * **`e6.local`**
 4. Click **OK**.
 5. A **Windows Security** credential prompt will appear:
-   * **User name:** `CAMBODIA\Administrator`
+   * **User name:** `E6\Administrator`
    * **Password:** *(Enter your Domain Administrator password)*
    * Click **OK**.
-6. Wait a few seconds for the welcome message: *"Welcome to the cambodia.local domain."*
+6. Wait a few seconds for the welcome message: *"Welcome to the e6.local domain."*
 7. Click **OK** ➔ Click **OK** ➔ Click **Close** ➔ Click **Restart Now**.
 
 #### Option B: Via PowerShell (Automated Method)
 ```powershell
-Add-Computer -DomainName "cambodia.local" -Credential (Get-Credential) -Restart
+Add-Computer -DomainName "e6.local" -Credential (Get-Credential) -Restart
 ```
-Enter `cambodia\Administrator` and its password. The client machine will join the domain and restart automatically.
+Enter `E6\Administrator` and its password. The client machine will join the domain and restart automatically.
+
