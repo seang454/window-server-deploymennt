@@ -54,41 +54,91 @@ sequenceDiagram
 
 ## Phase 1: AWS VPC & Network Infrastructure Setup
 
-### 1. Create the VPC
-1. Open the **AWS VPC Console** > **Your VPCs** > **Create VPC**.
-2. Settings:
-   * **Name tag:** `lab-ad-vpc`
-   * **IPv4 CIDR block:** `10.0.0.0/16`
-3. Click **Create VPC**.
-
-### 2. Create the Subnet
-1. Go to **Subnets** > **Create subnet**.
-2. Settings:
-   * **VPC:** Select `lab-ad-vpc`
-   * **Subnet name:** `lab-private-subnet-a`
-   * **Availability Zone:** Choose any (e.g., `ap-southeast-1a`)
-   * **IPv4 CIDR block:** `10.0.1.0/24`
-3. Click **Create subnet**.
+### 1. Create the VPC, Subnet & Internet Gateway
+1. Open the **AWS VPC Console** ➔ **Your VPCs** ➔ click **Create VPC**.
+2. Choose **Resources to create:**
+   * **Option A (Easiest - Recommended):** Select **VPC and more**:
+     * **Name tag auto-generation:** Type `lab-ad`
+     * **IPv4 CIDR block:** `10.0.0.0/16`
+     * **Number of Availability Zones (AZs):** `1`
+     * **Number of public subnets:** `1` (Expand *Customize subnets CIDR blocks* and set to **`10.0.1.0/24`**)
+     * **Number of private subnets:** `0`
+     * **NAT gateways:** `None`
+     * **VPC endpoints:** `None`
+     * Click **Create VPC**. *(This automatically creates the VPC, Subnet `10.0.1.0/24`, Internet Gateway, and Route Table so your instances have internet and SSH/RDP access!)*
+   * **Option B (Manual - "VPC only"):**
+     1. Create VPC `lab-ad-vpc` with CIDR `10.0.0.0/16`.
+     2. Go to **Subnets** ➔ **Create subnet** (`lab-private-subnet-a`, CIDR `10.0.1.0/24`).
+     3. Go to **Internet gateways** ➔ **Create internet gateway** (`lab-igw`) ➔ **Actions** ➔ **Attach to VPC** (`lab-ad-vpc`).
+     4. Go to **Route tables** ➔ select your VPC's main route table ➔ **Routes** tab ➔ **Edit routes** ➔ **Add route**: Destination `0.0.0.0/0` ➔ Target **Internet Gateway (`lab-igw`)** ➔ **Save changes**.
 
 ---
 
 ## Phase 2: Deploy AdGuard Home on Docker (Linux EC2)
 
 ### 1. Create AdGuard Security Group (`sg-adguard-docker`)
-Create a Security Group with the following inbound rules:
-* **Port 53 (UDP & TCP):** Source `10.0.1.10/32` (Only the Windows Domain Controller needs to send DNS queries here).
-* **Port 3000 & 80 (TCP):** Source `My IP` (For web administrative dashboard access).
-* **Port 22 (TCP):** Source `My IP` (SSH management).
 
-### 2. Launch the Linux EC2 Instance
-1. In the **EC2 Console**, launch an instance with **Amazon Linux 2023** or **Ubuntu 24.04 LTS**.
-2. **Instance type:** `t3.micro` or `t3.small`.
-3. Under **Network settings**:
-   * **VPC:** `lab-ad-vpc`
-   * **Subnet:** `lab-private-subnet-a`
-   * **Primary IP (Static ENI):** Specify **`10.0.1.20`**.
-   * **Security Group:** Select `sg-adguard-docker`.
-4. Launch and connect via SSH.
+> [!CAUTION]
+> **Inbound vs. Outbound Rules Warning:**  
+> Make sure you add the port rules below under **Inbound rules** (traffic coming *into* your server), **NOT Outbound rules**!  
+> Leave **Outbound rules** at the AWS default (`All traffic` ➔ `0.0.0.0/0`) so your server can access the internet to download Docker and resolve upstream DNS.
+
+1. Open **EC2 Console** ➔ **Network & Security** (left menu) ➔ **Security Groups** ➔ click **Create security group**.
+2. **Basic details:**
+   * **Security group name:** `sg-adguard-docker`
+   * **Description:** `Allow DNS from DC and Web UI / SSH from Admin`
+   * **VPC:** Select `lab-ad-vpc` (click the `X` on the default VPC first, then select your VPC).
+3. **Inbound rules** (Click **Add rule** for each row below):
+
+| Type | Protocol | Port Range | Source Type | Source | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Custom UDP** | UDP | `53` | Custom | `10.0.1.10/32` | DNS queries from Windows DC |
+| **Custom TCP** | TCP | `53` | Custom | `10.0.1.10/32` | DNS queries from Windows DC |
+| **Custom TCP** | TCP | `3000` | My IP | *(Auto-fills your IP)* | AdGuard Initial Setup Wizard |
+| **Custom TCP** | TCP | `80` | My IP | *(Auto-fills your IP)* | AdGuard Web Admin Dashboard |
+| **SSH** | TCP | `22` | My IP | *(Auto-fills your IP)* | SSH Admin Access |
+
+4. **Outbound rules** (Keep AWS Default — Do NOT restrict!):
+
+| Type | Protocol | Port Range | Destination Type | Destination | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **All traffic** | All | `All` | Anywhere-IPv4 | `0.0.0.0/0` | Allow server to reach Internet, Docker Hub & Cloudflare |
+
+5. Click **Create security group**.
+
+---
+
+### 2. Launch the Linux EC2 Instance (Step-by-Step AWS Console UI)
+
+1. In the **EC2 Console**, click **Instances** ➔ click the orange **Launch instances** button.
+2. **Name and tags:**
+   * **Name:** `AdGuard-Docker-Host`
+3. **Application and OS Images (Amazon Machine Image):**
+   * Select **Amazon Linux** ➔ **Amazon Linux 2023 AMI** (Free tier eligible).
+4. **Instance type:**
+   * Select **`t3.micro`** (or `t2.micro` / `t3.small`).
+5. **Key pair (login):**
+   * Select your existing Key Pair, or click **Create new key pair**:
+     * **Key pair name:** `lab-key`
+     * **Key pair type:** `RSA`
+     * **Private key file format:** `.pem`
+     * Click **Create key pair** (save the downloaded `lab-key.pem` file safely).
+6. **Network settings (IMPORTANT — Click the "Edit" button on the top-right of this box!):**
+   * **VPC:** Select `lab-ad-vpc`.
+   * **Subnet:** Select your subnet (`10.0.1.0/24`).
+   * **Auto-assign public IP:** Select **Enable** *(Required so you can connect via SSH and open the AdGuard Web UI from your laptop)*.
+   * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`sg-adguard-docker`**.
+   * **Advanced network configuration** *(Click the arrow at the bottom of Network settings to expand)*:
+     * Scroll down to **Primary IP** ➔ type **`10.0.1.20`**. *(This permanently locks the server's internal IP to `10.0.1.20`)*.
+7. **Configure storage:** Leave default (`8 GiB gp3`).
+8. Click **Launch instance**.
+9. **Connect via SSH:**
+   * Select the running `AdGuard-Docker-Host` instance ➔ click **Connect** (top-right) to use **EC2 Instance Connect** in your browser, or run from your laptop terminal:
+     ```bash
+     ssh -i "lab-key.pem" ec2-user@<Public-IPv4-Address>
+     ```
+
+---
 
 ### 3. Install Docker Compose and Deploy AdGuard Home
 
@@ -148,54 +198,88 @@ networks:
 
 4. Start the AdGuard Home service:
 ```bash
-docker compose up -d
+sudo docker compose up -d
 ```
 
 5. Verify the container status:
 ```bash
-docker compose ps
-docker compose logs -f
+sudo docker compose ps
+sudo docker compose logs -f
 ```
 
 ### 4. Complete AdGuard Initial Setup Wizard
-1. Open your browser and navigate to: `http://<Docker-Public-Or-Private-IP>:3000`
+1. Open your browser and navigate to: `http://<AdGuard-EC2-Public-IP>:3000`
 2. Follow the setup wizard:
-   * **Admin Web Interface:** Set to listen on port `80` (or `3000`).
+   * **Admin Web Interface:** Set to listen on port `80` (All interfaces).
    * **DNS Server:** Set to listen on `0.0.0.0:53` (All interfaces).
    * Create your admin username and password.
-3. Log into the AdGuard Dashboard:
-   * Go to **Settings** > **DNS settings**.
+3. Log into the AdGuard Dashboard (`http://<AdGuard-EC2-Public-IP>`):
+   * Go to **Settings** ➔ **DNS settings**.
    * Under **Upstream DNS servers**, specify your preferred public resolvers or AWS VPC resolver:
      ```text
-     https://dns.cloudflare.com/dns-query
-     1.1.1.1
+     https://1.1.1.1/dns-query
+     https://8.8.8.8/dns-query
      10.0.0.2
      ```
-   * Click **Apply**.
+   * Click **Test upstreams** ➔ Click **Apply**.
 
 ---
 
 ## Phase 3: Launch & Promote Windows Domain Controller
 
 ### 1. Create Domain Controller Security Group (`sg-domain-controller`)
-Add inbound rules for VPC traffic (Source: `10.0.0.0/16`):
-* **DNS (UDP/TCP):** Port `53`
-* **Kerberos (UDP/TCP):** Port `88`
-* **LDAP (TCP/UDP):** Port `389`
-* **SMB (TCP):** Port `445`
-* **RPC Endpoint Mapper (TCP):** Port `135`
-* **Dynamic RPC Ports (TCP):** Ports `49152 - 65535`
-* **RDP (TCP 3389):** Restricted to your management IP.
 
-### 2. Launch Windows Server EC2
-1. Launch an EC2 instance with **Microsoft Windows Server 2022 Base**.
-2. **Instance type:** `t3.medium`.
-3. Under **Network settings**:
-   * **VPC:** `lab-ad-vpc`
-   * **Subnet:** `lab-private-subnet-a`
-   * **Primary IP (Static ENI):** Specify **`10.0.1.10`**.
-   * **Security Group:** Select `sg-domain-controller`.
-4. Decrypt password and connect via RDP.
+1. In the **EC2 Console**, go to **Security Groups** ➔ click **Create security group**.
+2. **Basic details:**
+   * **Security group name:** `sg-domain-controller`
+   * **Description:** `Active Directory and Windows DNS ports for VPC`
+   * **VPC:** Select `lab-ad-vpc`.
+3. **Inbound rules** (Click **Add rule** for each row):
+
+| Type | Protocol | Port Range | Source Type | Source | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **All traffic** *(Easiest for Internal Lab)* | All | `All` | Custom | `10.0.0.0/16` | Allow all internal VPC traffic (DNS, AD, Kerberos, SMB, RPC) |
+| **RDP** | TCP | `3389` | My IP | *(Auto-fills your IP)* | Remote Desktop from your laptop |
+
+*(Note: If you prefer granular rules instead of `All traffic` from `10.0.0.0/16`, add rules with Source `10.0.0.0/16` for: **DNS** `53 UDP/TCP`, **Kerberos** `88 UDP/TCP`, **LDAP** `389 TCP/UDP`, **SMB** `445 TCP`, **RPC** `135 TCP`, and **Dynamic RPC** `49152-65535 TCP`).*
+
+4. **Outbound rules:**
+   * Keep default: **`All traffic` (`0.0.0.0/0`)**.
+5. Click **Create security group**.
+
+---
+
+### 2. Launch Windows Server EC2 (Step-by-Step AWS Console UI)
+
+1. Go to **EC2 Console** ➔ **Instances** ➔ click **Launch instances**.
+2. **Name and tags:**
+   * **Name:** `DC-Server-01`
+3. **Application and OS Images (AMI):**
+   * Click **Windows** ➔ select **Microsoft Windows Server 2022 Base** (or **2025 Base**).
+4. **Instance type:**
+   * Select **`t3.medium`** (2 vCPU, 4 GiB RAM — recommended so Windows Server GUI runs smoothly).
+5. **Key pair (login):**
+   * Select your `lab-key` key pair *(Required to decrypt the Windows Administrator password!)*.
+6. **Network settings (Click "Edit" on the top-right):**
+   * **VPC:** Select `lab-ad-vpc`.
+   * **Subnet:** Select `lab-private-subnet-a` (`10.0.1.0/24`).
+   * **Auto-assign public IP:** Select **Enable**.
+   * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`sg-domain-controller`**.
+   * **Advanced network configuration** *(Click to expand at the bottom)*:
+     * Under **Primary IP**, enter **`10.0.1.10`**.
+7. **Configure storage:** Leave default (`30 GiB gp3`).
+8. Click **Launch instance**.
+
+#### How to Get Your Windows Password & Connect via RDP:
+1. Wait **4 minutes** after launching for Windows to generate its initial password.
+2. In the **EC2 Console**, select `DC-Server-01` ➔ click **Connect** (top-right).
+3. Select the **RDP client** tab.
+4. Click **Get password**:
+   * Click **Upload private key file** and select your `lab-key.pem` file.
+   * Click **Decrypt password**.
+   * Copy the decrypted password and click **Download remote desktop file** to log into Windows Server!
+
+---
 
 ### 3. Install AD DS & DNS Roles and Promote to Domain Controller
 
