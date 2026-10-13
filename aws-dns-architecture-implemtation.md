@@ -174,36 +174,47 @@ sequenceDiagram
 
 ---
 
-### 3. Install Docker Compose and Deploy AdGuard Home
+### 3. Install Docker, Docker Compose, and Deploy AdGuard Home
 
-1. Connect to your Linux EC2 instance via SSH and install Docker with Docker Compose plugin:
+#### Step 3.1: Install Docker Engine
+Run the following commands in your SSH terminal:
 ```bash
-# Update packages and install Docker
+# 1. Update system and install Docker & Git
 sudo dnf update -y
 sudo dnf install -y docker git
+
+# 2. Enable and start Docker service
 sudo systemctl enable --now docker
+
+# 3. Add ec2-user to docker group (allows running docker without sudo)
 sudo usermod -aG docker ec2-user
+```
 
-# Apply docker group without logging out
-newgrp docker
-
-# Install Docker Compose Plugin (v2)
+#### Step 3.2: Install Docker Compose Plugin (v2)
+Amazon Linux 2023 does not ship Docker Compose by default. Install the official Compose v2 binary:
+```bash
+# 1. Create Docker CLI plugins folder
 sudo mkdir -p /usr/local/lib/docker/cli-plugins
+
+# 2. Download the official Docker Compose binary
 sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+
+# 3. Grant execute permissions
 sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Verify installation
-docker compose version
+# 4. Verify Compose is installed successfully
+sudo docker compose version
 ```
+*(Expected output: `Docker Compose version v2.xx.x`)*
 
-2. Create a project directory for AdGuard Home:
+#### Step 3.3: Create Directory & Deploy `docker-compose.yml`
 ```bash
-mkdir -p ~/adguard && cd ~/adguard
-mkdir -p work conf
-```
+# 1. Create project directories for persistent data
+mkdir -p ~/adguard/work ~/adguard/conf
+cd ~/adguard
 
-3. Create the `docker-compose.yml` file (`~/adguard/docker-compose.yml`):
-```yaml
+# 2. Create the docker-compose.yml file
+cat << 'EOF' > docker-compose.yml
 services:
   adguardhome:
     image: adguard/adguardhome:latest
@@ -219,29 +230,19 @@ services:
       # Initial setup wizard (port 3000) & Web GUI (port 80)
       - "3000:3000/tcp"
       - "80:80/tcp"
-      # Optional: Encrypted DNS (DoT / DoH / QUIC) if needed later
-      # - "443:443/tcp"
-      # - "443:443/udp"
-      # - "853:853/tcp"
-      # - "853:853/udp"
-      # - "784:784/udp"
     networks:
       - adguard-net
 
 networks:
   adguard-net:
     driver: bridge
-```
+EOF
 
-4. Start the AdGuard Home service:
-```bash
+# 3. Start AdGuard Home container
 sudo docker compose up -d
-```
 
-5. Verify the container status:
-```bash
+# 4. Check status
 sudo docker compose ps
-sudo docker compose logs -f
 ```
 
 ### 4. Complete AdGuard Initial Setup Wizard
