@@ -250,35 +250,40 @@ sudo docker compose logs -f
 
 ---
 
-### 2. Launch Windows Server EC2 (Step-by-Step AWS Console UI)
+### 2. Launch Windows Server 2022 EC2 (Step-by-Step AWS Console UI)
 
-1. Go to **EC2 Console** ➔ **Instances** ➔ click **Launch instances**.
+1. Go to **EC2 Console** ➔ **Instances** ➔ click the orange **Launch instances** button.
 2. **Name and tags:**
    * **Name:** `DC-Server-01`
-3. **Application and OS Images (AMI):**
-   * Click **Windows** ➔ select **Microsoft Windows Server 2022 Base** (or **2025 Base**).
+3. **Application and OS Images (Amazon Machine Image):**
+   * Click on the **Windows** operating system tile.
+   * Under **Amazon Machine Image (AMI)** dropdown, select:  
+     👉 **Microsoft Windows Server 2022 Base** *(Free tier eligible)*.
 4. **Instance type:**
-   * Select **`t3.medium`** (2 vCPU, 4 GiB RAM — recommended so Windows Server GUI runs smoothly).
+   * Select **`t3.medium`** (2 vCPU, 4 GiB RAM — highly recommended for Active Directory, DNS Server, and Windows Desktop GUI performance).
 5. **Key pair (login):**
-   * Select your `lab-key` key pair *(Required to decrypt the Windows Administrator password!)*.
-6. **Network settings (Click "Edit" on the top-right):**
-   * **VPC:** Select `lab-ad-vpc`.
-   * **Subnet:** Select `lab-private-subnet-a` (`10.0.1.0/24`).
-   * **Auto-assign public IP:** Select **Enable**.
+   * Select your **`lab-key`** key pair (`.pem` format).  
+     *(You will need this file to decrypt the Windows Administrator password).*
+6. **Network settings (Click the "Edit" button on the top-right of this box!):**
+   * **VPC:** Select **`lab-ad-vpc`**.
+   * **Subnet:** Select **`lab-private-subnet-a`** (`10.0.1.0/24`).
+   * **Auto-assign public IP:** Select **Enable** *(Allows you to connect via Remote Desktop / RDP from your computer)*.
    * **Firewall (security groups):** Select **Select existing security group** ➔ choose **`domain-controller-sg`**.
-   * **Advanced network configuration** *(Click to expand at the bottom)*:
-     * Under **Primary IP**, enter **`10.0.1.10`**.
-7. **Configure storage:** Leave default (`30 GiB gp3`).
+   * **Advanced network configuration** *(Click the dropdown arrow at the bottom of Network settings to expand)*:
+     * Under **Primary IP**, change from *Auto-assign* to **Custom**, and type:  
+       👉 **`10.0.1.10`** *(This permanently assigns static private IP `10.0.1.10` to your Domain Controller)*.
+7. **Configure storage:** Keep default **`30 GiB gp3`**.
 8. Click **Launch instance**.
 
-#### How to Get Your Windows Password & Connect via RDP:
-1. Wait **4 minutes** after launching for Windows to generate its initial password.
+#### How to Get Your Windows Server 2022 Password & Connect via RDP:
+1. Wait **3 to 4 minutes** after launching until the instance status shows **Running** and **2/2 checks passed**.
 2. In the **EC2 Console**, select `DC-Server-01` ➔ click **Connect** (top-right).
 3. Select the **RDP client** tab.
 4. Click **Get password**:
-   * Click **Upload private key file** and select your `lab-key.pem` file.
+   * Click **Upload private key file** and choose your `lab-key.pem` file.
    * Click **Decrypt password**.
-   * Copy the decrypted password and click **Download remote desktop file** to log into Windows Server!
+   * Copy the decrypted password and click **Download remote desktop file**.
+5. Double-click the downloaded `.rdp` file on your computer, paste the decrypted password, and log into your Windows Server 2022 desktop!
 
 ---
 
@@ -419,9 +424,22 @@ We now instruct AWS VPC to tell all member EC2 instances that their primary DNS 
 
 ## Phase 6: Client Verification & Domain Join
 
-### 1. Launch a Member Client Instance
-* Launch a Windows 10/11 or Windows Server instance (`Win-Client-01`) in `lab-private-subnet-a`.
-* Leave its network adapter set to default **Obtain an IP address automatically** and **Obtain DNS server address automatically**.
+### 1. Launch a Member Client Instance (`Win-Client-01`)
+
+To test DNS and domain joining, launch a second Windows instance:
+1. In the **EC2 Console**, click **Launch instances**.
+2. **Name:** `Win-Client-01`
+3. **AMI:** Select **Microsoft Windows Server 2022 Base** (or a Windows 10/11 AMI if using a client workstation image).
+4. **Instance type:** `t3.medium` (or `t3.small`).
+5. **Key pair:** Select your `lab-key`.
+6. **Network settings (Click "Edit"):**
+   * **VPC:** Select `lab-ad-vpc`.
+   * **Subnet:** Select `lab-private-subnet-a` (`10.0.1.0/24`).
+   * **Auto-assign public IP:** Select **Enable** (to connect via RDP).
+   * **Firewall:** Select `domain-controller-sg` (or create a basic `client-sg` allowing RDP from your IP).
+   * **Primary IP:** Leave at default **Auto-assign**! *(Do NOT set a custom IP here; this allows AWS VPC DHCP to automatically assign an IP and test our DHCP Option Set!)*.
+7. Click **Launch instance**.
+8. Connect via RDP using its decrypted password.
 
 ### 2. Verify Network Leases on Client
 
