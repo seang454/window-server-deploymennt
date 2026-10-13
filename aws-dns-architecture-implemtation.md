@@ -197,8 +197,48 @@ Add inbound rules for VPC traffic (Source: `10.0.0.0/16`):
    * **Security Group:** Select `sg-domain-controller`.
 4. Decrypt password and connect via RDP.
 
-### 3. Install AD DS & DNS Roles
-Open PowerShell as Administrator on the Windows Server:
+### 3. Install AD DS & DNS Roles and Promote to Domain Controller
+
+You can install Active Directory and DNS using either the **Windows Server Manager GUI** or **PowerShell**:
+
+#### Option A: Via Windows Server Manager GUI (Visual Method)
+
+##### Step 3.1: Add AD DS and DNS Server Roles
+1. Open **Server Manager** (from the Start Menu or Taskbar).
+2. In the top-right corner, click **Manage** ➔ select **Add Roles and Features**.
+3. **Before You Begin:** Click **Next**.
+4. **Installation Type:** Select **Role-based or feature-based installation** ➔ Click **Next**.
+5. **Server Selection:** Select your local server (`DC-Server-01` / `10.0.1.10`) ➔ Click **Next**.
+6. **Server Roles:**
+   * Check ✅ **Active Directory Domain Services** (Click **Add Features** in the pop-up).
+   * Check ✅ **DNS Server** (Click **Add Features** in the pop-up).
+   * Click **Next**.
+7. **Features / AD DS / DNS Server:** Click **Next** through the informational screens.
+8. **Confirmation:** Click **Install**. Wait for the installation bar to complete, then click **Close**.
+
+##### Step 3.2: Promote the Server to a Domain Controller (GUI Wizard)
+1. In **Server Manager**, click the **yellow warning flag icon** at the top-right notifications bar.
+2. Click **"Promote this server to a domain controller"**.
+3. **Deployment Configuration:**
+   * Select **Add a new forest**.
+   * **Root domain name:** Type `cambodia.local` (or `e6.local`).
+   * Click **Next**.
+4. **Domain Controller Options:**
+   * Ensure ✅ **Domain Name System (DNS) server** and ✅ **Global Catalog (GC)** are checked.
+   * Enter and confirm a **Directory Services Restore Mode (DSRM) password** (e.g., `P@ssw0rdLab2026!`).
+   * Click **Next**.
+5. **DNS Options:** Click **Next** (ignore the delegation warning; this is a new root forest).
+6. **Additional Options:** Verify the **NetBIOS domain name** (`CAMBODIA`) ➔ Click **Next**.
+7. **Paths:** Keep default database, log, and SYSVOL folders ➔ Click **Next**.
+8. **Review Options & Prerequisites Check:**
+   * Click **Next** and wait for the prerequisite validation to show a green checkmark (*"All prerequisite checks passed successfully"*).
+   * Click **Install**.
+9. *The server will automatically restart after promotion completes.*
+
+---
+
+#### Option B: Via PowerShell (Automated Method)
+Open **PowerShell as Administrator** on the Windows Server:
 
 ```powershell
 # 1. Install Windows Features
@@ -219,21 +259,58 @@ Install-ADDSForest `
 
 ---
 
-## Phase 4: Configure Windows DNS Forwarders to Point to AdGuard
+## Phase 4: Configure Windows DNS Forwarders & Zones (Pointing to AdGuard)
 
-Once the Domain Controller restarts:
-1. Log into the DC via RDP.
-2. Open PowerShell as Administrator and configure the DNS Forwarder to forward all unresolved external queries to the **AdGuard Docker host (`10.0.1.20`)**:
+Once the Domain Controller restarts, log back into `DC-Server-01` via RDP using `CAMBODIA\Administrator`.
 
+### 1. Configure DNS Forwarder to AdGuard (`10.0.1.20`)
+
+#### Option A: Via Windows DNS Manager GUI (Visual Method)
+1. Open **Server Manager** ➔ click **Tools** (top-right) ➔ select **DNS** (or press `Win + R`, type **`dnsmgmt.msc`**, and press **Enter**).
+2. In the left console tree, right-click your server name (e.g., `DC-SERVER-01`) ➔ select **Properties**.
+3. Go to the **Forwarders** tab.
+4. Click the **Edit...** button.
+5. Where it says *"Click here to add an IP address or DNS Name"*, type your AdGuard Docker host IP:
+   * **`10.0.1.20`** and press **Enter**.
+6. *(Optional)* If any other default forwarders (such as `10.0.0.2` or `8.8.8.8`) are listed, select them and click **Delete** so all external traffic is strictly filtered by AdGuard.
+7. Click **OK** ➔ Click **Apply** ➔ Click **OK**.
+
+#### Option B: Via PowerShell
 ```powershell
-# Remove existing root hints/forwarders and set AdGuard IP as primary forwarder
+# Remove existing forwarders and set AdGuard IP as primary forwarder
 Set-DnsServerForwarder -IPAddress 10.0.1.20 -PassThru
 ```
 
-*(Alternatively via GUI)*:
-* Open **DNS Manager** (`dnsmgmt.msc`).
-* Right-click your server node > **Properties** > **Forwarders** tab.
-* Click **Edit**, enter `10.0.1.20`, and click **OK**.
+---
+
+### 2. Create Custom Forward Lookup Zone & Host (A) Records (Optional Lab Zone)
+
+If you want to host an additional zone like `cambodia.com` and `web.cambodia.com` (just like in your VMware lab):
+
+#### Option A: Via Windows DNS Manager GUI (Visual Method)
+1. Open **DNS Manager** (`dnsmgmt.msc`).
+2. Expand your server name ➔ right-click **Forward Lookup Zones** ➔ select **New Zone...**.
+3. **New Zone Wizard:**
+   * Click **Next**.
+   * **Zone Type:** Select **Primary zone** (Keep *"Store the zone in Active Directory"* checked) ➔ Click **Next**.
+   * **Active Directory Zone Replication Scope:** Select *To all DNS servers running on domain controllers in this domain* ➔ Click **Next**.
+   * **Zone Name:** Type **`cambodia.com`** ➔ Click **Next**.
+   * **Dynamic Update:** Select **Allow only secure dynamic updates (recommended for Active Directory)** ➔ Click **Next** ➔ Click **Finish**.
+4. **Create the `web` Host (A) Record:**
+   * In the left tree under *Forward Lookup Zones*, click on **`cambodia.com`**.
+   * Right-click inside the right pane (or right-click `cambodia.com`) ➔ select **New Host (A or AAAA)...**.
+   * **Name:** Type `web` (Notice the FQDN previews as `web.cambodia.com.`).
+   * **IP address:** Type `10.0.1.10` (or your web server's IP).
+   * Click **Add Host** ➔ Click **OK** ➔ Click **Done**.
+
+#### Option B: Via PowerShell
+```powershell
+# Create AD-Integrated Primary Zone 'cambodia.com'
+Add-DnsServerPrimaryZone -Name "cambodia.com" -ReplicationScope "Domain" -PassThru
+
+# Add Host (A) record 'web.cambodia.com' -> 10.0.1.10
+Add-DnsServerResourceRecordA -ZoneName "cambodia.com" -Name "web" -IPv4Address "10.0.1.10"
+```
 
 ---
 
@@ -259,40 +336,68 @@ We now instruct AWS VPC to tell all member EC2 instances that their primary DNS 
 
 ### 1. Launch a Member Client Instance
 * Launch a Windows 10/11 or Windows Server instance (`Win-Client-01`) in `lab-private-subnet-a`.
-* Leave its network adapter set to default DHCP.
+* Leave its network adapter set to default **Obtain an IP address automatically** and **Obtain DNS server address automatically**.
 
 ### 2. Verify Network Leases on Client
-Log into `Win-Client-01` and run:
 
+#### Option A: Via Windows GUI (`ncpa.cpl`)
+1. Press `Win + R`, type **`ncpa.cpl`**, and press **Enter**.
+2. Double-click **Ethernet** (or right-click ➔ **Status**).
+3. Click the **Details...** button.
+4. Verify:
+   * **DHCP Enabled:** `Yes`
+   * **IPv4 Address:** `10.0.1.x` (Assigned by AWS VPC)
+   * **Connection-specific DNS Suffix:** `cambodia.local`
+   * **IPv4 DNS Server:** `10.0.1.10`
+
+#### Option B: Via Command Prompt / PowerShell
 ```powershell
 ipconfig /all
 ```
 
-**Verification Checklist:**
-* **IPv4 Address:** `10.0.1.x` (Assigned by AWS VPC)
-* **Primary Connection-Specific DNS Suffix:** `cambodia.local`
-* **DNS Servers:** `10.0.1.10`
+---
 
 ### 3. Verify DNS and Ad-Filtering
-Run the following test queries:
+Open PowerShell or Command Prompt on the client and run:
 
 ```powershell
 # Test 1: Internal Active Directory Resolution
 nslookup dc-server-01.cambodia.local
 # Expected: Returns 10.0.1.10 from Windows DNS
 
-# Test 2: External Web Resolution
+# Test 2: Custom Zone Resolution
+nslookup web.cambodia.com
+# Expected: Returns 10.0.1.10 from Windows DNS
+
+# Test 3: External Web Resolution
 nslookup google.com
 # Expected: Resolves public IP via AdGuard -> Upstream
 
-# Test 3: Ad-block Filtering Test
+# Test 4: Ad-block Filtering Test
 nslookup doubleclick.net
 # Expected: Resolves to 0.0.0.0 (Blocked by AdGuard!)
 ```
 
 Check your **AdGuard Web Dashboard** (`http://10.0.1.20`). You will see query statistics reflecting the forwarded requests from Windows Server.
 
-### 4. Join the Domain
+---
+
+### 4. Join the Client to the Active Directory Domain
+
+#### Option A: Via Windows System Properties GUI (Visual Method)
+1. Press `Win + R`, type **`sysdm.cpl`**, and press **Enter** (this opens **System Properties**).
+2. Under the **Computer Name** tab, click the **Change...** button.
+3. Under **Member of**, select **Domain:** and type:
+   * **`cambodia.local`**
+4. Click **OK**.
+5. A **Windows Security** credential prompt will appear:
+   * **User name:** `CAMBODIA\Administrator`
+   * **Password:** *(Enter your Domain Administrator password)*
+   * Click **OK**.
+6. Wait a few seconds for the welcome message: *"Welcome to the cambodia.local domain."*
+7. Click **OK** ➔ Click **OK** ➔ Click **Close** ➔ Click **Restart Now**.
+
+#### Option B: Via PowerShell (Automated Method)
 ```powershell
 Add-Computer -DomainName "cambodia.local" -Credential (Get-Credential) -Restart
 ```
