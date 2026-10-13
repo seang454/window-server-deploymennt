@@ -54,25 +54,51 @@ sequenceDiagram
 
 ## Phase 1: AWS VPC & Network Infrastructure Setup
 
-### 1. Create the VPC, Subnet & Internet Gateway
+### 1. Create the VPC
 1. Open the **AWS VPC Console** ➔ **Your VPCs** ➔ click **Create VPC**.
-2. Choose **Resources to create:**
-   * **Option A (Easiest - Recommended):** Select **VPC and more**:
-     * **Name tag auto-generation:** Type `lab-ad`
-     * **IPv4 CIDR block:** `10.0.0.0/16`
-     * **Number of Availability Zones (AZs):** `1`
-     * **Number of public subnets:** `1` (Expand *Customize subnets CIDR blocks* and set to **`10.0.1.0/24`**)
-     * **Number of private subnets:** `0`
-     * **NAT gateways:** `None`
-     * **VPC endpoints:** `None`
-     * Click **Create VPC**. *(This automatically creates the VPC, Subnet `10.0.1.0/24`, Internet Gateway, and Route Table so your instances have internet and SSH/RDP access!)*
-   * **Option B (Manual - "VPC only"):**
-     1. Create VPC `lab-ad-vpc` with CIDR `10.0.0.0/16`.
-     2. Go to **Subnets** ➔ **Create subnet** (`lab-private-subnet-a`, CIDR `10.0.1.0/24`).
-     3. Go to **Internet gateways** ➔ **Create internet gateway** (`lab-igw`) ➔ **Actions** ➔ **Attach to VPC** (`lab-ad-vpc`).
-     4. Go to **Route tables** ➔ select your VPC's route table (`lab-ad-vpc`):
-        * **Routes tab:** Click **Edit routes** ➔ **Add route**: Destination `0.0.0.0/0` ➔ Target **Internet Gateway (`lab-igw`)** ➔ **Save changes**.
-        * **Subnet associations tab (CRUCIAL):** Click **Edit subnet associations** ➔ check the box for `lab-private-subnet-a` (`10.0.1.0/24`) ➔ click **Save associations**. *(Without this, the subnet cannot route out to the internet, causing SSH and package downloads to time out!)*
+2. Select **VPC only**:
+   * **Name tag:** `lab-ad-vpc`
+   * **IPv4 CIDR block:** `10.0.0.0/16`
+3. Click **Create VPC**.
+
+### 2. Create the Subnet
+1. In the VPC Console, click **Subnets** (left menu) ➔ click **Create subnet**.
+2. Settings:
+   * **VPC:** Select `lab-ad-vpc`
+   * **Subnet name:** `lab-private-subnet-a`
+   * **Availability Zone:** Choose any (e.g., `ap-southeast-1a`)
+   * **IPv4 CIDR block:** `10.0.1.0/24`
+3. Click **Create subnet**.
+
+### 3. Configure Internet Gateway & Route Table (CRITICAL for SSH & RDP Connectivity!)
+
+> [!IMPORTANT]
+> **Why this step is mandatory for SSH:**  
+> When you create a custom VPC and subnet manually in AWS, they are created **completely isolated from the internet**. Even if your EC2 instance has a Public IP address, your SSH and RDP connections will **fail with "Connection timed out"** unless you attach an Internet Gateway and explicitly associate the subnet to the route table!
+
+#### Step 3.1: Create & Attach the Internet Gateway
+1. In the **AWS VPC Console**, click **Internet gateways** (left menu).
+2. Click the orange **Create internet gateway** button.
+3. **Name tag:** `lab-igw` ➔ click **Create internet gateway**.
+4. In the green banner at the top, click **Actions** ➔ select **Attach to VPC**.
+5. Select your VPC (`lab-ad-vpc`) ➔ click **Attach internet gateway**.
+
+#### Step 3.2: Add the `0.0.0.0/0` Internet Route
+1. In the left menu of the VPC Console, click **Route tables**.
+2. Select the route table associated with `lab-ad-vpc` (e.g., `rtb-xxxxxx`).
+3. In the lower pane, click the **Routes** tab ➔ click **Edit routes**.
+4. Click **Add route**:
+   * **Destination:** `0.0.0.0/0`
+   * **Target:** Click the dropdown ➔ select **Internet Gateway** ➔ choose your `lab-igw`.
+5. Click **Save changes**.
+
+#### Step 3.3: Explicit Subnet Association (The Step That Fixes the Timeout!)
+1. In that same Route Table page, click the **Subnet associations** tab.
+2. Scroll to the section **Subnets without explicit associations** and click the **Edit subnet associations** button.
+3. Check the checkbox next to your subnet: ✅ **`lab-private-subnet-a`** (`10.0.1.0/24`).
+4. Click **Save associations**.
+
+*Now your subnet is a fully routable public subnet capable of receiving SSH (port 22) and RDP (port 3389) traffic without any timeouts!*
 
 ---
 
