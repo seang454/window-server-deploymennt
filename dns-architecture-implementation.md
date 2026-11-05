@@ -77,6 +77,9 @@ Follow these sub-phases carefully.
 > **Host Linux / Docker Impact:**  
 > When you disable the host hypervisor lock, WSL2 (Ubuntu) and Docker Desktop on your **physical laptop** will temporarily be unable to start. They will resume working normally once you restore the settings (see **Phase 0.4** below).
 
+Choose **Option 1** first. If your machine is running **Windows 11 version 24H2** or continues to throw `Feature 'hv.capable' was 0`, use **Option 2**.
+
+#### Option 1: Standard Method (Windows 10 / Earlier Windows 11)
 1. **Turn Off Memory Integrity (Core Isolation):**
    * On your physical host PC, open the Start Menu and search for **Core isolation** (or open **Windows Security** ➔ **Device Security** ➔ **Core isolation details**).
    * Toggle **Memory integrity** to **OFF**.
@@ -87,7 +90,34 @@ Follow these sub-phases carefully.
      bcdedit /set hypervisorlaunchtype off
      ```
    * Ensure it returns: *"The operation completed successfully."*
-3. **Boot into Windows 11.** VMware Workstation now has direct hardware access to Intel VT-x.
+3. **Restart your physical laptop.** *(Click Start ➔ Power ➔ Restart, do not use Fast Startup shutdown).*
+
+---
+
+#### Option 2: Deep VBS & Hypervisor Unlock (Windows 11 24H2 / Persistent `hv.capable` Error)
+
+> [!IMPORTANT]
+> On **Windows 11 24H2 (Build 26100+)**, Microsoft enables **Virtualization-Based Security (VBS)** and **App Control for Business** by default. These features force the hypervisor to stay active even after setting `hypervisorlaunchtype off`.  
+> Run this comprehensive script in **PowerShell as Administrator** to disable all competing virtualization features and registry locks:
+
+```powershell
+# 1. Disable the 4 Windows features that hold the hypervisor lock
+dism.exe /Online /Disable-Feature:Microsoft-Hyper-V-All /NoRestart
+dism.exe /Online /Disable-Feature:VirtualMachinePlatform /NoRestart
+dism.exe /Online /Disable-Feature:Windows-Hypervisor-Platform /NoRestart
+dism.exe /Online /Disable-Feature:IsolatedUserMode /NoRestart
+
+# 2. Tell the Windows Bootloader not to launch Hyper-V
+bcdedit /set hypervisorlaunchtype off
+
+# 3. Disable the VBS lock in the Registry
+New-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" -Name "EnableVirtualizationBasedSecurity" -Value 0 -Type DWord
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" -Name "RequirePlatformSecurityFeatures" -Value 0 -Type DWord
+
+# 4. Perform a full clean restart (Bypasses Fast Startup hibernation)
+shutdown /r /t 0
+```
 
 ---
 
@@ -128,13 +158,21 @@ When you have finished your Windows Server lab and want your physical host's WSL
 1. **Power off the Windows Server VM** in VMware.
 2. In VMware VM Settings ➔ **Processors** ➔ **UNCHECK** `Virtualize Intel VT-x/EPT or AMD-V/RVI`.  
    *(If you leave this checked while the host hypervisor is re-enabled, VMware will show the `hv.capable` error again).*
-3. Open **PowerShell as Administrator** on your physical laptop and run:
-   ```powershell
-   bcdedit /set hypervisorlaunchtype auto
-   ```
+3. Open **PowerShell as Administrator** on your physical laptop:
+   * **If you used Option 1:**
+     ```powershell
+     bcdedit /set hypervisorlaunchtype auto
+     shutdown /r /t 0
+     ```
+   * **If you used Option 2 (Windows 11 24H2):**
+     ```powershell
+     dism.exe /Online /Enable-Feature:VirtualMachinePlatform /NoRestart
+     bcdedit /set hypervisorlaunchtype auto
+     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" -Name "EnableVirtualizationBasedSecurity" -Value 1 -Type DWord
+     shutdown /r /t 0
+     ```
 4. (Optional) In **Windows Security ➔ Device Security ➔ Core isolation details**, turn **Memory integrity** back to **ON**.
-5. **Restart your physical laptop.**
-6. Once rebooted, launch **Ubuntu (WSL2)** or **Docker Desktop** on your physical laptop. They will start normally!
+5. Once rebooted, launch **Ubuntu (WSL2)** or **Docker Desktop** on your physical laptop. They will start normally!
 
 ---
 
